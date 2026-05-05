@@ -1,0 +1,31 @@
+%YAML:1.0
+
+# 串口输入配置
+enable_serial: true
+serial_port: "/dev/ttyACM0"
+serial_baud_rate: 921600
+
+# 本地TCP回环输入RTCM，可用于接入其他本地转发程序
+enable_rtcm_tcp_loopback: false
+rtcm_tcp_port: 2101
+
+# 是否通过NTRIP服务接入RTCM差分数据
+enable_ntrip_rtcm: true
+ntrip_server: "203.107.45.154"    # NTrip服务器地址
+ntrip_port: 8003                  # NTrip服务器端口
+ntrip_mountpoint: "RTCM32_GGB"    # 挂载点
+ntrip_username: "qxtmcr00113198"  # NTrip用户名
+ntrip_password: "abb4e14"         # NTrip密码
+
+# GNSS 原始数据观测发布列表，目前仅支持 GPS、BDS
+raw_observation_systems:
+  - GPS
+  - BDS
+
+# GNSS 星历观测发布列表，目前仅支持 GPS、BDS
+ephemeris_systems:
+  - GPS
+  - BDS
+
+# 配置UBlox接收机单元
+enable_config_bring: false
