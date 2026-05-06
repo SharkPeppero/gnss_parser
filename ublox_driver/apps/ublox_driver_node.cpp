@@ -4,7 +4,8 @@
 #include <rclcpp/executors/multi_threaded_executor.hpp>
 #include <rclcpp/utilities.hpp>
 
-#include "ublox_driver/ublox_driver.hpp"
+#include "ublox_driver/common/logging.hpp"
+#include "ublox_driver/gnss_communication_wrapper/ublox_driver.hpp"
 
 int main(int argc, char **argv) {
   const std::vector<std::string> non_ros_args = rclcpp::remove_ros_arguments(argc, argv);
@@ -55,7 +56,9 @@ int main(int argc, char **argv) {
 
   rclcpp::init(argc, argv);
   auto node = std::make_shared<rclcpp::Node>("ublox_driver");
-  auto ublox_driver_node = std::make_shared<ublox_driver::UbloxDriver>(node, config_filepath, ublox_config_filepath);
+  auto ublox_driver_node = std::make_shared<ublox_driver::GNSSDriverManager>(node,            //
+                                                                             config_filepath, //
+                                                                             ublox_config_filepath);
   rclcpp::executors::MultiThreadedExecutor executor;
   executor.add_node(node);
   executor.spin();

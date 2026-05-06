@@ -13,20 +13,22 @@
 
 #include <rclcpp/rclcpp.hpp>
 
-#include "ublox_driver/loopback_tcp_client.hpp"
-#include "ublox_driver/ntrip_client.hpp"
-#include "ublox_driver/params.h"
-#include "ublox_driver/ros_handler.hpp"
-#include "ublox_driver/serial_handler.hpp"
-#include "ublox_driver/tcp_client.hpp"
-#include "ublox_driver/ublox_message_processor.hpp"
+#include "ublox_driver/gnss_communication_wrapper/ros_handler.hpp"
+#include "ublox_driver/gnss_message_parser/ublox_message_processor.hpp"
+#include "ublox_driver/params/params.hpp"
+#include "ublox_driver/rtcm/loopback_tcp_client.hpp"
+#include "ublox_driver/rtcm/ntrip_client.hpp"
+#include "ublox_driver/rtcm/tcp_client.hpp"
+#include "ublox_driver/serial/serial_handler.hpp"
 
 namespace ublox_driver {
 
-class UbloxDriver {
+class GNSSDriverManager {
 public:
-  UbloxDriver(rclcpp::Node::SharedPtr node, std::string config_filepath, std::string receiver_config_filepath);
-  ~UbloxDriver();
+  GNSSDriverManager(rclcpp::Node::SharedPtr node, //
+                    std::string config_filepath,  //
+                    std::string receiver_config_filepath);
+  ~GNSSDriverManager();
 
 private:
   bool configureReceiverAtStartup();
@@ -54,10 +56,12 @@ private:
   std::condition_variable ack_cv_;
   int ack_flag_ = 0;
 
+  // 根据导航电文PVT组织GGA消息
   std::mutex latest_pvt_mutex_;
   gnss_comm::PVTSolutionPtr latest_pvt_;
   rclcpp::TimerBase::SharedPtr ntrip_gga_timer_;
 
+  // RTCM
   std::mutex rtcm_log_mutex_;
   std::vector<uint8_t> rtcm_log_buffer_;
   uint64_t rtcm_input_chunk_count_ = 0;

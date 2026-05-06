@@ -1,22 +1,20 @@
-#include "ublox_driver/ros_handler.hpp"
+#include "ublox_driver/gnss_communication_wrapper/ros_handler.hpp"
 
 #include <algorithm>
 #include <cmath>
 
 namespace {
 
-rclcpp::Time cvtTimestamp(const gnss_comm::gtime_t &time) { return rclcpp::Time(static_cast<int64_t>(std::llround(gnss_comm::time2sec(time) * 1e9))); }
+rclcpp::Time cvtTimestamp(const gnss_comm::gtime_t &time) {
+  return rclcpp::Time(static_cast<int64_t>(std::llround(gnss_comm::time2sec(time) * 1e9)));
+}
 
 } // namespace
 
 namespace ublox_driver {
 
-UbloxRosHandler::UbloxRosHandler(const rclcpp::Node::SharedPtr &node,
-                                 uint32_t raw_observation_system_mask,
-                                 uint32_t ephemeris_system_mask)
-    : node_(node),
-      raw_observation_system_mask_(raw_observation_system_mask),
-      ephemeris_system_mask_(ephemeris_system_mask) {
+UbloxRosHandler::UbloxRosHandler(const rclcpp::Node::SharedPtr &node, uint32_t raw_observation_system_mask, uint32_t ephemeris_system_mask)
+    : node_(node), raw_observation_system_mask_(raw_observation_system_mask), ephemeris_system_mask_(ephemeris_system_mask) {
   const auto qos = rclcpp::QoS(100);
 
   cbg_pvt_ = node_->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
@@ -132,8 +130,6 @@ void UbloxRosHandler::publishPvt(const gnss_comm::PVTSolutionPtr &pvt_soln) {
   pub_lla_->publish(lla_msg);
 }
 
-void UbloxRosHandler::registerPvtCallback(std::function<void(const gnss_comm::PVTSolutionPtr &)> callback) {
-  pvt_callbacks_.push_back(std::move(callback));
-}
+void UbloxRosHandler::registerPvtCallback(std::function<void(const gnss_comm::PVTSolutionPtr &)> callback) { pvt_callbacks_.push_back(std::move(callback)); }
 
 } // namespace ublox_driver

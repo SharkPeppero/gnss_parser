@@ -1,6 +1,6 @@
-#include "ublox_driver/serial_handler.hpp"
+#include "ublox_driver/serial/serial_handler.hpp"
 
-#include "ublox_driver/params.h"
+#include "ublox_driver/params/params.hpp"
 
 #include <cerrno>
 #include <cstdint>

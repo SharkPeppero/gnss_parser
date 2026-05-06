@@ -1,4 +1,4 @@
-#include "ublox_driver/state_machine_registry.hpp"
+#include "ublox_driver/gnss_communication_wrapper/state_machine_registry.hpp"
 
 #include <iomanip>
 #include <sstream>

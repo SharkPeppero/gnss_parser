@@ -6,7 +6,7 @@
 
 #include <string>
 
-#include "ublox_driver/tcp_client.hpp"
+#include "ublox_driver/rtcm/tcp_client.hpp"
 
 class NtripClient : public TcpClient {
 public:

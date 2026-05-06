@@ -1,7 +1,7 @@
 //
 // Created by yjh on 2026/4/30.
 //
-#include "ublox_driver/params.h"
+#include "ublox_driver/params/params.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -13,7 +13,7 @@
 
 #include <yaml-cpp/yaml.h>
 
-#include "ublox_driver/logging.hpp"
+#include "ublox_driver/common/logging.hpp"
 
 namespace {
 

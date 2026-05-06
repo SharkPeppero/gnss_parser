@@ -1,12 +1,12 @@
-#include "ublox_driver/ntrip_client.hpp"
+#include "ublox_driver/rtcm/ntrip_client.hpp"
 
 #include <cstdint>
 #include <sstream>
 #include <utility>
 #include <vector>
 
-#include "ublox_driver/logging.hpp"
-#include "ublox_driver/params.h"
+#include "ublox_driver/common/logging.hpp"
+#include "ublox_driver/params/params.hpp"
 
 namespace {
 
@@ -14,8 +14,7 @@ constexpr size_t kMaxNtripHeaderBytes = 8192;
 constexpr int kNtripHandshakeTimeoutMs = 3000;
 
 std::string Base64Encode(const std::string &input) {
-  static constexpr char kAlphabet[] =
-      "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  static constexpr char kAlphabet[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
   std::string output;
   output.reserve(((input.size() + 2) / 3) * 4);
@@ -43,22 +42,12 @@ std::string Base64Encode(const std::string &input) {
   return output;
 }
 
-bool StartsWith(const std::string &value, const std::string &prefix) {
-  return value.rfind(prefix, 0) == 0;
-}
+bool StartsWith(const std::string &value, const std::string &prefix) { return value.rfind(prefix, 0) == 0; }
 
 } // namespace
 
-NtripClient::NtripClient(std::string host,
-                         uint64_t port,
-                         std::string mountpoint,
-                         std::string username,
-                         std::string password,
-                         unsigned int buf_size)
-    : TcpClient(std::move(host), port, buf_size),
-      mountpoint_(std::move(mountpoint)),
-      username_(std::move(username)),
-      password_(std::move(password)) {}
+NtripClient::NtripClient(std::string host, uint64_t port, std::string mountpoint, std::string username, std::string password, unsigned int buf_size)
+    : TcpClient(std::move(host), port, buf_size), mountpoint_(std::move(mountpoint)), username_(std::move(username)), password_(std::move(password)) {}
 
 std::string NtripClient::buildRequest() const {
   std::string mountpoint = mountpoint_;
@@ -94,9 +83,7 @@ bool NtripClient::parseResponse(std::string response) {
   const std::string header = response.substr(0, header_end);
   const size_t first_line_end = header.find_first_of("\r\n");
   const std::string first_line = header.substr(0, first_line_end);
-  if (!StartsWith(first_line, "ICY 200") &&
-      !StartsWith(first_line, "HTTP/1.0 200") &&
-      !StartsWith(first_line, "HTTP/1.1 200")) {
+  if (!StartsWith(first_line, "ICY 200") && !StartsWith(first_line, "HTTP/1.0 200") && !StartsWith(first_line, "HTTP/1.1 200")) {
     LOG(ERROR) << "NTRIP server rejected request: " << first_line;
     return false;
   }
@@ -107,8 +94,7 @@ bool NtripClient::parseResponse(std::string response) {
     dispatchDataCallbacks(payload, response.size() - payload_offset);
   }
 
-  LOG(INFO) << "NTRIP mountpoint attached successfully: " << mountpoint_
-            << " via " << host() << ':' << port();
+  LOG(INFO) << "NTRIP mountpoint attached successfully: " << mountpoint_ << " via " << host() << ':' << port();
 
   return true;
 }
@@ -121,8 +107,7 @@ bool NtripClient::onConnected() {
   }
 
   std::string response;
-  if (!readUntil(response, "\r\n\r\n", kMaxNtripHeaderBytes, kNtripHandshakeTimeoutMs) &&
-      !readUntil(response, "\n\n", kMaxNtripHeaderBytes, kNtripHandshakeTimeoutMs)) {
+  if (!readUntil(response, "\r\n\r\n", kMaxNtripHeaderBytes, kNtripHandshakeTimeoutMs) && !readUntil(response, "\n\n", kMaxNtripHeaderBytes, kNtripHandshakeTimeoutMs)) {
     LOG(ERROR) << "Timed out waiting for NTRIP handshake response from " << host() << ':' << port();
     return false;
   }

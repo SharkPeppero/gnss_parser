@@ -10,9 +10,9 @@
 #include <map>
 #include <memory>
 
-#include "ublox_driver/logging.hpp"
-#include "ublox_driver/params.h"
-#include "ublox_driver/ros_handler.hpp"
+#include "ublox_driver/common/logging.hpp"
+#include "ublox_driver/gnss_communication_wrapper/ros_handler.hpp"
+#include "ublox_driver/params/params.hpp"
 
 using namespace gnss_comm;
 

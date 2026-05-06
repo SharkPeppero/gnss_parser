@@ -4,7 +4,7 @@
 #ifndef UBLOX_DRIVER_LOOPBACK_TCP_CLIENT_HPP_
 #define UBLOX_DRIVER_LOOPBACK_TCP_CLIENT_HPP_
 
-#include "ublox_driver/tcp_client.hpp"
+#include "ublox_driver/rtcm/tcp_client.hpp"
 
 class LoopbackTcpClient : public TcpClient {
 public:

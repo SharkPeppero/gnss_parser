@@ -13,7 +13,7 @@
 #include <thread>
 #include <vector>
 
-#include "ublox_driver/data_callback.hpp"
+#include "ublox_driver/serial/data_callback.hpp"
 
 class TcpClient {
 public:
