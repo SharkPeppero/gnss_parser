@@ -14,7 +14,6 @@
   <depend>rclcpp</depend>
   <depend>sensor_msgs</depend>
   <depend>gnss_comm</depend>
-  <depend>gnss_interfaces</depend>
   <depend>yaml-cpp</depend>
   <exec_depend>launch</exec_depend>
   <exec_depend>launch_ros</exec_depend>

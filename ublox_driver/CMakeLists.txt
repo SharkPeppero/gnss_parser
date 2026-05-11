@@ -14,7 +14,6 @@ find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(gnss_comm REQUIRED)
-find_package(gnss_interfaces REQUIRED)
 find_package(Threads REQUIRED)
 find_package(yaml-cpp REQUIRED)
 find_library(UBLOX_GLOG_LIBRARY NAMES glog REQUIRED)
@@ -24,6 +23,7 @@ set(UBLOX_DRIVER_SOURCES
         src/gnss_communication_wrapper/ublox_driver.cpp
         src/gnss_communication_wrapper/ros_handler.cpp
         src/gnss_message_parser/ublox_message_processor.cpp
+        src/gnss_message_parser/ublox_message_processor_helper.cpp
         src/serial/serial_handler.cpp
         src/rtcm/tcp_client.cpp
         src/rtcm/loopback_tcp_client.cpp
@@ -40,7 +40,6 @@ ament_target_dependencies(${PROJECT_NAME}
         rclcpp
         sensor_msgs
         gnss_comm
-        gnss_interfaces
 )
 target_link_libraries(${PROJECT_NAME}
         ${UBLOX_GLOG_LIBRARY}

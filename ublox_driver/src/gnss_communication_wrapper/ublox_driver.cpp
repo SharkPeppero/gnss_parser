@@ -22,6 +22,7 @@ constexpr uint64_t kRtcmChunkLogPeriodicInterval = 50;
 constexpr uint8_t kRtcmPreamble = 0xD3;
 constexpr uint16_t kRtcmMaxPayloadLength = 1023;
 
+/**  */
 uint32_t ComputeRtcmCrc24q(const uint8_t *data, size_t len) {
   constexpr uint32_t kPolynomial = 0x1864CFB;
   uint32_t crc = 0;
@@ -101,7 +102,14 @@ GNSSDriverManager::GNSSDriverManager(rclcpp::Node::SharedPtr node, //
 
   // 初始化ROS的句柄
   ros_handler_ = std::make_shared<UbloxRosHandler>(node_, params_.raw_observation_system_mask, params_.ephemeris_system_mask);
-  ros_handler_->registerPvtCallback([this](const gnss_comm::PVTSolutionPtr &pvt_soln) { handlePvtSolution(pvt_soln); });
+  ros_handler_->registerPvtCallback([this](const gnss_comm::PVTSolutionPtr &pvt_soln) {
+    if (!pvt_soln) {
+      return;
+    }
+
+    std::lock_guard<std::mutex> lock(latest_pvt_mutex_);
+    latest_pvt_ = std::make_shared<gnss_comm::PVTSolution>(*pvt_soln);
+  });
 
   // 初始化Ublox消息的解析对象
   ublox_message_processor_ = std::make_shared<UbloxMessageProcessor>(ros_handler_);
@@ -122,49 +130,85 @@ GNSSDriverManager::~GNSSDriverManager() {
   }
 }
 
-void GNSSDriverManager::handleConfigAck(const uint8_t *data, size_t len) {
-  const int ack_result = UbloxMessageProcessor::check_ack(data, len);
-  if (ack_result == 0) {
+/**
+ * @brief 配置Serial模块的Pipline
+ *  1、配置串口参数
+ *  2、尝试配置Ublox的配置文件
+ */
+void GNSSDriverManager::setupSerialPipeline() {
+  if (!params_.enable_serial) {
+    LOG(WARNING) << "Serial communication module is disabled.";
     return;
   }
 
-  {
-    std::lock_guard<std::mutex> lock(ack_mutex_);
-    ack_flag_ = ack_result;
-  }
-  ack_cv_.notify_one();
-}
+  serial_handler_ = std::make_shared<SerialHandler>(params_.serial_port, static_cast<unsigned int>(params_.serial_baud_rate));
 
-void GNSSDriverManager::handlePvtSolution(const gnss_comm::PVTSolutionPtr &pvt_soln) {
-  if (!pvt_soln) {
+  if (!serial_handler_->is_open()) {
+    LOG(ERROR) << "Failed to initialize serial communication module.";
     return;
   }
 
-  std::lock_guard<std::mutex> lock(latest_pvt_mutex_);
-  latest_pvt_ = std::make_shared<gnss_comm::PVTSolution>(*pvt_soln);
-}
-
-std::string GNSSDriverManager::buildNmeaGgaSentence(const gnss_comm::PVTSolution &pvt_soln) const {
-  const int fix_quality = GetNmeaFixQuality(pvt_soln);
-  if (fix_quality == 0) {
-    return "";
+  // 尝试配置Ublox的配置文件
+  if (params_.enable_config_bring && !configureReceiverAtStartup()) {
+    LOG(WARNING) << "Receiver startup configuration did not complete successfully.";
   }
 
-  gnss_comm::gtime_t utc_time = gnss_comm::gpst2utc(pvt_soln.time);
-  double epoch[6] = {};
-  gnss_comm::time2epoch(utc_time, epoch);
+  // 注册串口数据的解析回调函数
+  serial_handler_->registerDataCallback([this](const uint8_t *data, size_t len) {
+    if (ublox_message_processor_) {
+      ublox_message_processor_->process_data(data, len);
+    }
+  });
 
-  const double geoid_separation = pvt_soln.hgt - pvt_soln.hgt_msl;
-
-  std::ostringstream body;
-  body << "GPGGA," << std::setfill('0') << std::setw(2) << static_cast<int>(epoch[3]) << std::setw(2) << static_cast<int>(epoch[4]) << std::fixed << std::setprecision(3) << std::setw(6) << epoch[5]
-       << ',' << FormatNmeaDegrees(pvt_soln.lat, true) << ',' << (pvt_soln.lat >= 0.0 ? 'N' : 'S') << ',' << FormatNmeaDegrees(pvt_soln.lon, false) << ',' << (pvt_soln.lon >= 0.0 ? 'E' : 'W') << ','
-       << fix_quality << ',' << std::setw(2) << static_cast<int>(pvt_soln.num_sv) << ',' << std::setprecision(1) << (pvt_soln.p_dop > 0.0 ? pvt_soln.p_dop : 0.0) << ',' << std::setprecision(3)
-       << pvt_soln.hgt_msl << ",M," << geoid_separation << ",M,,";
-
-  return AppendNmeaChecksum(body.str());
+  // 开启串口数据读取异步线程
+  serial_handler_->startRead();
 }
 
+/**
+ * @brief 配置RTCM差分数据获取的模块Pipline
+ *  1、检查一下是否打开了串口模块（需要将GGA数据写出）
+ *  2、初始化Ntrip客户端
+ *  3、Ntrip客户端注册RTCM差分数据的回调处理
+ *  4、初始化GGA发布的定时器
+ */
+void GNSSDriverManager::setupRtcmPipeline() {
+  if (!params_.enable_rtcm_tcp_loopback && !params_.enable_ntrip_rtcm) {
+    LOG(ERROR) << "Disable RTCM TCP LoopBack And Disable Ntrip.";
+    return;
+  }
+
+  if (!serial_handler_ || !serial_handler_->is_open()) {
+    LOG(WARNING) << "RTCM TCP client skipped because serial module is unavailable.";
+    return;
+  }
+
+  // 1、初始化NTrip客户端、
+  if (params_.enable_rtcm_tcp_loopback) {
+    rtcm_client_ = std::make_shared<LoopbackTcpClient>(params_.rtcm_tcp_port);
+  } else {
+    rtcm_client_ = std::make_shared<NtripClient>(params_.ntrip_server, params_.ntrip_port, params_.ntrip_mountpoint, params_.ntrip_username, params_.ntrip_password);
+  }
+
+  // 2、Ntrip客户端注册RTCM差分数据的回调处理
+  rtcm_client_->registerDataCallback([this](const uint8_t *data, size_t len) {
+    logRtcmFrames(data, len);
+    if (serial_handler_) {
+      serial_handler_->writeRaw(data, len, kIoTimeoutMs);
+    }
+  });
+
+  rtcm_client_->startRead();
+  LOG(INFO) << "RTCM client started with automatic reconnect enabled.";
+
+  // 3、初始化GGA发布的定时器
+  if (params_.enable_ntrip_rtcm) {
+    ntrip_gga_timer_ = node_->create_wall_timer(kNtripGgaInterval, [this]() { sendNtripGga(); });
+    LOG(INFO) << "NTRIP GGA uplink timer started with period=" << std::chrono::duration_cast<std::chrono::milliseconds>(kNtripGgaInterval).count() << "ms.";
+  }
+}
+
+// ======================= 根据PVT数据组织GGA数据 =====================
+/** @brief 定时器控制RTCM客户端上发GGA的消息，获取RTCM差分数据 */
 void GNSSDriverManager::sendNtripGga() {
   if (!params_.enable_ntrip_rtcm || !rtcm_client_ || !rtcm_client_->is_open()) {
     return;
@@ -212,16 +256,29 @@ void GNSSDriverManager::sendNtripGga() {
   }
 }
 
-void GNSSDriverManager::logRtcmInputChunk(size_t len) {
-  ++rtcm_input_chunk_count_;
-  rtcm_input_total_bytes_ += len;
-
-  if (rtcm_input_chunk_count_ <= kRtcmChunkLogAlwaysCount || (rtcm_input_chunk_count_ % kRtcmChunkLogPeriodicInterval) == 0U) {
-    LOG(INFO) << "RTCM input chunk received:"
-              << " chunk_index=" << rtcm_input_chunk_count_ << " chunk_bytes=" << len << " total_bytes=" << rtcm_input_total_bytes_;
+/** @brief 利用PVT的导航电文组织GGA消息 */
+std::string GNSSDriverManager::buildNmeaGgaSentence(const gnss_comm::PVTSolution &pvt_soln) const {
+  const int fix_quality = GetNmeaFixQuality(pvt_soln);
+  if (fix_quality == 0) {
+    return "";
   }
+
+  gnss_comm::gtime_t utc_time = gnss_comm::gpst2utc(pvt_soln.time);
+  double epoch[6] = {};
+  gnss_comm::time2epoch(utc_time, epoch);
+
+  const double geoid_separation = pvt_soln.hgt - pvt_soln.hgt_msl;
+
+  std::ostringstream body;
+  body << "GPGGA," << std::setfill('0') << std::setw(2) << static_cast<int>(epoch[3]) << std::setw(2) << static_cast<int>(epoch[4]) << std::fixed << std::setprecision(3) << std::setw(6) << epoch[5]
+       << ',' << FormatNmeaDegrees(pvt_soln.lat, true) << ',' << (pvt_soln.lat >= 0.0 ? 'N' : 'S') << ',' << FormatNmeaDegrees(pvt_soln.lon, false) << ',' << (pvt_soln.lon >= 0.0 ? 'E' : 'W') << ','
+       << fix_quality << ',' << std::setw(2) << static_cast<int>(pvt_soln.num_sv) << ',' << std::setprecision(1) << (pvt_soln.p_dop > 0.0 ? pvt_soln.p_dop : 0.0) << ',' << std::setprecision(3)
+       << pvt_soln.hgt_msl << ",M," << geoid_separation << ",M,,";
+
+  return AppendNmeaChecksum(body.str());
 }
 
+// ====================== RTCM差分数据的打印 ========================
 void GNSSDriverManager::logRtcmFrames(const uint8_t *data, size_t len) {
   if (data == nullptr || len == 0U) {
     return;
@@ -231,6 +288,19 @@ void GNSSDriverManager::logRtcmFrames(const uint8_t *data, size_t len) {
   logRtcmInputChunk(len);
   rtcm_log_buffer_.insert(rtcm_log_buffer_.end(), data, data + len);
   drainRtcmLogBuffer();
+}
+
+void GNSSDriverManager::logRtcmInputChunk(size_t len) {
+  ++rtcm_input_chunk_count_;
+  rtcm_input_total_bytes_ += len;
+
+  if (rtcm_input_chunk_count_ <= kRtcmChunkLogAlwaysCount || //
+      (rtcm_input_chunk_count_ % kRtcmChunkLogPeriodicInterval) == 0U) {
+    LOG(INFO) << "RTCM input chunk received:"
+              << " chunk_index=" << rtcm_input_chunk_count_ //
+              << " chunk_bytes=" << len                     //
+              << " total_bytes=" << rtcm_input_total_bytes_;
+  }
 }
 
 void GNSSDriverManager::drainRtcmLogBuffer() {
@@ -280,10 +350,26 @@ void GNSSDriverManager::drainRtcmLogBuffer() {
               << " frame_index=" << rtcm_frame_count_ << " type=" << message_type << " payload_length=" << payload_length << " frame_length=" << frame_length
               << " total_input_bytes=" << rtcm_input_total_bytes_;
 
+    if (ros_handler_) {
+      ros_handler_->publishRtcm(rtcm_log_buffer_.data(), frame_length, message_type, payload_length);
+    }
+
     rtcm_log_buffer_.erase(rtcm_log_buffer_.begin(), rtcm_log_buffer_.begin() + static_cast<std::ptrdiff_t>(frame_length));
   }
 }
 
+// ========================== Ublox接收机开机参数配置 ==========================
+
+/**
+ * @brief 在程序启动时向 u-blox 接收机下发配置命令
+ *  检查串口是否可用；
+ *  检查配置列表是否为空；
+ *  根据配置生成 UBX 配置消息；
+ *  通过串口发送给接收机；
+ *  等待接收机返回 ACK；
+ *  ACK 成功则配置成功，否则失败。
+ * @return
+ */
 bool GNSSDriverManager::configureReceiverAtStartup() {
   if (!serial_handler_ || !serial_handler_->is_open()) {
     LOG(ERROR) << "Serial port is not available, skip receiver startup configuration.";
@@ -295,6 +381,7 @@ bool GNSSDriverManager::configureReceiverAtStartup() {
     return true;
   }
 
+  // 根据配置生成 UBX 配置消息
   std::unique_ptr<uint8_t[]> config_buffer(new uint8_t[kReceiverConfigBufferCapacity]);
   std::memset(config_buffer.get(), 0, kReceiverConfigBufferCapacity);
 
@@ -306,9 +393,10 @@ bool GNSSDriverManager::configureReceiverAtStartup() {
 
   {
     std::lock_guard<std::mutex> lock(ack_mutex_);
-    ack_flag_ = 0;
+    ack_flag_ = false;
   }
 
+  // 通过串口发送给接收机
   serial_handler_->clearDataCallbacks();
   serial_handler_->registerDataCallback([this](const uint8_t *data, size_t len) { handleConfigAck(data, len); });
   serial_handler_->startRead();
@@ -319,9 +407,10 @@ bool GNSSDriverManager::configureReceiverAtStartup() {
     return false;
   }
 
+  //
   std::unique_lock<std::mutex> lock(ack_mutex_);
   const auto deadline = std::chrono::steady_clock::now() + kReceiverConfigAckTimeout;
-  while (ack_flag_ == 0 && rclcpp::ok() && std::chrono::steady_clock::now() < deadline) {
+  while (ack_flag_ == false && rclcpp::ok() && std::chrono::steady_clock::now() < deadline) {
     ack_cv_.wait_for(lock, kReceiverConfigAckPollInterval);
   }
   lock.unlock();
@@ -329,7 +418,7 @@ bool GNSSDriverManager::configureReceiverAtStartup() {
   serial_handler_->stopRead();
   serial_handler_->clearDataCallbacks();
 
-  if (ack_flag_ == 0) {
+  if (ack_flag_ == false) {
     if (!rclcpp::ok()) {
       LOG(WARNING) << "Receiver startup configuration interrupted by shutdown signal.";
     } else {
@@ -341,60 +430,20 @@ bool GNSSDriverManager::configureReceiverAtStartup() {
   return ack_flag_ == 1;
 }
 
-void GNSSDriverManager::setupSerialPipeline() {
-  if (!params_.enable_serial) {
-    LOG(WARNING) << "Serial communication module is disabled.";
+/**
+ * @brief 处理UBLOX配置的ACK确认应答数据
+ */
+void GNSSDriverManager::handleConfigAck(const uint8_t *data, size_t len) {
+  const int ack_result = UbloxMessageProcessor::check_ack(data, len);
+  if (ack_result == 0) {
     return;
   }
 
-  serial_handler_ = std::make_shared<SerialHandler>(params_.serial_port, static_cast<unsigned int>(params_.serial_baud_rate));
-  if (!serial_handler_->is_open()) {
-    LOG(ERROR) << "Failed to initialize serial communication module.";
-    return;
+  {
+    std::lock_guard<std::mutex> lock(ack_mutex_);
+    ack_flag_ = ack_result;
   }
-
-  if (params_.enable_config_bring && !configureReceiverAtStartup()) {
-    LOG(WARNING) << "Receiver startup configuration did not complete successfully.";
-  }
-
-  serial_handler_->registerDataCallback([this](const uint8_t *data, size_t len) {
-    if (ublox_message_processor_) {
-      ublox_message_processor_->process_data(data, len);
-    }
-  });
-  serial_handler_->startRead();
-}
-
-void GNSSDriverManager::setupRtcmPipeline() {
-  if (!params_.enable_rtcm_tcp_loopback && !params_.enable_ntrip_rtcm) {
-    return;
-  }
-
-  if (!serial_handler_ || !serial_handler_->is_open()) {
-    LOG(WARNING) << "RTCM TCP client skipped because serial module is unavailable.";
-    return;
-  }
-
-  if (params_.enable_rtcm_tcp_loopback) {
-    rtcm_client_ = std::make_shared<LoopbackTcpClient>(params_.rtcm_tcp_port);
-  } else {
-    rtcm_client_ = std::make_shared<NtripClient>(params_.ntrip_server, params_.ntrip_port, params_.ntrip_mountpoint, params_.ntrip_username, params_.ntrip_password);
-  }
-
-  rtcm_client_->registerDataCallback([this](const uint8_t *data, size_t len) {
-    logRtcmFrames(data, len);
-    if (serial_handler_) {
-      serial_handler_->writeRaw(data, len, kIoTimeoutMs);
-    }
-  });
-
-  rtcm_client_->startRead();
-  LOG(INFO) << "RTCM client started with automatic reconnect enabled.";
-
-  if (params_.enable_ntrip_rtcm) {
-    ntrip_gga_timer_ = node_->create_wall_timer(kNtripGgaInterval, [this]() { sendNtripGga(); });
-    LOG(INFO) << "NTRIP GGA uplink timer started with period=" << std::chrono::duration_cast<std::chrono::milliseconds>(kNtripGgaInterval).count() << "ms.";
-  }
+  ack_cv_.notify_one();
 }
 
 } // namespace ublox_driver

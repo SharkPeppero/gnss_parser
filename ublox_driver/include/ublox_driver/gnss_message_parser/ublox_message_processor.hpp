@@ -18,36 +18,54 @@ using namespace gnss_comm;
 
 namespace {
 // clang-format off
-// UBLOX消息的0、1字节
-static constexpr uint8_t UBX_SYNC_1 = 0xB5;               // ubx message sync code 1
-static constexpr uint8_t UBX_SYNC_2 = 0x62;               // ubx message sync code 2
+// 配置是否配置成功
+static constexpr uint16_t UBX_ACK_ACK_ID = 0x0501; // ubx message id: message Acknowledged
+static constexpr uint16_t UBX_ACK_NAK_ID = 0x0500; // ubx message id: message Not-Acknowledged
 
-static constexpr uint16_t UBX_ACK_ACK_ID = 0x0501;        // ubx message id: message Acknowledged
-static constexpr uint16_t UBX_ACK_NAK_ID = 0x0500;        // ubx message id: message Not-Acknowledged
-static constexpr uint16_t UBX_CFG_VALSET_ID = 0x068A;     // ubx message id: sets values corresponding to provided key-value pairs within a transaction
+//
+static constexpr uint16_t UBX_CFG_VALSET_ID = 0x068A; // ubx message id: sets values corresponding to provided key-value pairs within a transaction
 
-// UBLOX消息的2、3字节组合成msg_type
-static constexpr uint16_t UBX_RXMSFRBX_ID = 0x0213;       // ubx message id: raw subframe data
-static constexpr uint16_t UBX_RXMRAWX_ID = 0x0215;        // ubx message id: multi-gnss raw meas data
-
-static constexpr uint16_t UBX_NAVPOS_ID = 0x0107;         // ubx message id: Navigation Position Velocity Time Solution
-static constexpr uint16_t UBX_TIM_TP_ID = 0x0D01;         // ubx message id:  information on the timing of the next pulse
-static constexpr uint16_t UBX_UNKNOWN_ID = 0x0000;        // ubx message id:  unknown or unsupported message
+// PVT导航报文的字节长度
 static constexpr uint32_t UBX_PVT_PAYLOAD_LEN = 92;
 static constexpr uint8_t CPSTD_VALID = 10;                // carrier-phase std threshold for cycle clip detection
 static constexpr uint8_t LLI_SLIP = 0x01;                 // LLI: cycle-slip
 static constexpr uint8_t LLI_HALFC = 0x02;                // LLI: half-cycle not resovled
-// carrier wave length (m)
+
+// data[0]    data[1]  data[2]    data[3]    data[4]    data[5]    data[6]
+//   B5     |   62    |  MsgID   LENGTH_L   LENGTH_H   PAYLOAD...
+// UBX同步头 | 消息类别 | 消息ID |     payload长度      | 具体数据内容 |   校验和
+// B5 62    | CLASS   | ID    | LENGTH_L | LENGTH_H |   PAYLOAD  | CK_A | CK_B
+
+// UBLOX消息的0、1字节（UBX 协议头）
+static constexpr uint8_t UBX_SYNC_1 = 0xB5;               // ubx message sync code 1
+static constexpr uint8_t UBX_SYNC_2 = 0x62;               // ubx message sync code 2
+
+// UBLOX消息的2、3字节组合成msg_type
+static constexpr uint16_t UBX_RXMSFRBX_ID = 0x0213;       // RXM-SFRBX | 原始导航子帧，用于解码 GPS/BDS/GAL/GLO 星历
+static constexpr uint16_t UBX_RXMRAWX_ID = 0x0215;        // RXM-RAWX  | 原始观测量：伪距、载波相位、多普勒、信噪比
+static constexpr uint16_t UBX_NAVPOS_ID = 0x0107;         // NAV-POS   | 接收机位置、速度、时间解
+static constexpr uint16_t UBX_TIM_TP_ID = 0x0D01;         // TimePulse | 时间脉冲信息，和 PPS/TimePulse 相关
+static constexpr uint16_t UBX_UNKNOWN_ID = 0x0000;        // 未知的消息类型
+
+// clang-format on
+
+// 根据频率计算不同的GNSS频点的载波波长（载波波长单位米）
 static constexpr double lam_carr[MAXFREQ] = {
-    LIGHT_SPEED / FREQ1, LIGHT_SPEED / FREQ2, LIGHT_SPEED / FREQ5, LIGHT_SPEED / FREQ6, LIGHT_SPEED / FREQ7,
-    LIGHT_SPEED / FREQ8, LIGHT_SPEED / FREQ9
+    LIGHT_SPEED / FREQ1, //
+    LIGHT_SPEED / FREQ2, //
+    LIGHT_SPEED / FREQ5, //
+    LIGHT_SPEED / FREQ6, //
+    LIGHT_SPEED / FREQ7, //
+    LIGHT_SPEED / FREQ8, //
+    LIGHT_SPEED / FREQ9  //
 };
 
-static constexpr uint8_t GPS_WEEK_ROLLOVER_N = 2;  // TODO: assuming 2 GPS week rollovers
+static constexpr uint8_t GPS_WEEK_ROLLOVER_N = 2; // TODO: assuming 2 GPS week rollovers
 static constexpr uint8_t PREAMB_CNAV = 0x8B;      // cnav preamble
 
-static constexpr double P2_5 = 0.03125;               // 2^-5
-static constexpr double P2_6 = 0.015625;              // 2^-6
+// PVT导航电文中不是直接存储浮点数，而是用整数加比例因子的形式进行编码
+static constexpr double P2_5 = 0.03125;                // 2^-5
+static constexpr double P2_6 = 0.015625;               // 2^-6
 static constexpr double P2_11 = 4.882812500000000E-04; // 2^-11
 static constexpr double P2_15 = 3.051757812500000E-05; // 2^-15
 static constexpr double P2_17 = 7.629394531250000E-06; // 2^-17
@@ -75,84 +93,77 @@ static constexpr double P2_55 = 2.775557561562891E-17; // 2^-55
 static constexpr double P2_59 = 1.734723475976810E-18; // 2^-59
 static constexpr double P2_66 = 1.355252715606881E-20; // 2^-66
 
+// CRC-24Q表，用于导航电文、RTCM、SBAS数据校验，后续用这个表快速计算CRC24Q
 static constexpr unsigned int tbl_CRC24Q[] = {
-    0x000000, 0x864CFB, 0x8AD50D, 0x0C99F6, 0x93E6E1, 0x15AA1A, 0x1933EC, 0x9F7F17,
-    0xA18139, 0x27CDC2, 0x2B5434, 0xAD18CF, 0x3267D8, 0xB42B23, 0xB8B2D5, 0x3EFE2E,
-    0xC54E89, 0x430272, 0x4F9B84, 0xC9D77F, 0x56A868, 0xD0E493, 0xDC7D65, 0x5A319E,
-    0x64CFB0, 0xE2834B, 0xEE1ABD, 0x685646, 0xF72951, 0x7165AA, 0x7DFC5C, 0xFBB0A7,
-    0x0CD1E9, 0x8A9D12, 0x8604E4, 0x00481F, 0x9F3708, 0x197BF3, 0x15E205, 0x93AEFE,
-    0xAD50D0, 0x2B1C2B, 0x2785DD, 0xA1C926, 0x3EB631, 0xB8FACA, 0xB4633C, 0x322FC7,
-    0xC99F60, 0x4FD39B, 0x434A6D, 0xC50696, 0x5A7981, 0xDC357A, 0xD0AC8C, 0x56E077,
-    0x681E59, 0xEE52A2, 0xE2CB54, 0x6487AF, 0xFBF8B8, 0x7DB443, 0x712DB5, 0xF7614E,
-    0x19A3D2, 0x9FEF29, 0x9376DF, 0x153A24, 0x8A4533, 0x0C09C8, 0x00903E, 0x86DCC5,
-    0xB822EB, 0x3E6E10, 0x32F7E6, 0xB4BB1D, 0x2BC40A, 0xAD88F1, 0xA11107, 0x275DFC,
-    0xDCED5B, 0x5AA1A0, 0x563856, 0xD074AD, 0x4F0BBA, 0xC94741, 0xC5DEB7, 0x43924C,
-    0x7D6C62, 0xFB2099, 0xF7B96F, 0x71F594, 0xEE8A83, 0x68C678, 0x645F8E, 0xE21375,
-    0x15723B, 0x933EC0, 0x9FA736, 0x19EBCD, 0x8694DA, 0x00D821, 0x0C41D7, 0x8A0D2C,
-    0xB4F302, 0x32BFF9, 0x3E260F, 0xB86AF4, 0x2715E3, 0xA15918, 0xADC0EE, 0x2B8C15,
-    0xD03CB2, 0x567049, 0x5AE9BF, 0xDCA544, 0x43DA53, 0xC596A8, 0xC90F5E, 0x4F43A5,
-    0x71BD8B, 0xF7F170, 0xFB6886, 0x7D247D, 0xE25B6A, 0x641791, 0x688E67, 0xEEC29C,
-    0x3347A4, 0xB50B5F, 0xB992A9, 0x3FDE52, 0xA0A145, 0x26EDBE, 0x2A7448, 0xAC38B3,
-    0x92C69D, 0x148A66, 0x181390, 0x9E5F6B, 0x01207C, 0x876C87, 0x8BF571, 0x0DB98A,
-    0xF6092D, 0x7045D6, 0x7CDC20, 0xFA90DB, 0x65EFCC, 0xE3A337, 0xEF3AC1, 0x69763A,
-    0x578814, 0xD1C4EF, 0xDD5D19, 0x5B11E2, 0xC46EF5, 0x42220E, 0x4EBBF8, 0xC8F703,
-    0x3F964D, 0xB9DAB6, 0xB54340, 0x330FBB, 0xAC70AC, 0x2A3C57, 0x26A5A1, 0xA0E95A,
-    0x9E1774, 0x185B8F, 0x14C279, 0x928E82, 0x0DF195, 0x8BBD6E, 0x872498, 0x016863,
-    0xFAD8C4, 0x7C943F, 0x700DC9, 0xF64132, 0x693E25, 0xEF72DE, 0xE3EB28, 0x65A7D3,
-    0x5B59FD, 0xDD1506, 0xD18CF0, 0x57C00B, 0xC8BF1C, 0x4EF3E7, 0x426A11, 0xC426EA,
-    0x2AE476, 0xACA88D, 0xA0317B, 0x267D80, 0xB90297, 0x3F4E6C, 0x33D79A, 0xB59B61,
-    0x8B654F, 0x0D29B4, 0x01B042, 0x87FCB9, 0x1883AE, 0x9ECF55, 0x9256A3, 0x141A58,
-    0xEFAAFF, 0x69E604, 0x657FF2, 0xE33309, 0x7C4C1E, 0xFA00E5, 0xF69913, 0x70D5E8,
-    0x4E2BC6, 0xC8673D, 0xC4FECB, 0x42B230, 0xDDCD27, 0x5B81DC, 0x57182A, 0xD154D1,
-    0x26359F, 0xA07964, 0xACE092, 0x2AAC69, 0xB5D37E, 0x339F85, 0x3F0673, 0xB94A88,
-    0x87B4A6, 0x01F85D, 0x0D61AB, 0x8B2D50, 0x145247, 0x921EBC, 0x9E874A, 0x18CBB1,
-    0xE37B16, 0x6537ED, 0x69AE1B, 0xEFE2E0, 0x709DF7, 0xF6D10C, 0xFA48FA, 0x7C0401,
-    0x42FA2F, 0xC4B6D4, 0xC82F22, 0x4E63D9, 0xD11CCE, 0x575035, 0x5BC9C3, 0xDD8538
-};
-// clang-format on
+    0x000000, 0x864CFB, 0x8AD50D, 0x0C99F6, 0x93E6E1, 0x15AA1A, 0x1933EC, 0x9F7F17, 0xA18139, 0x27CDC2, 0x2B5434, 0xAD18CF, 0x3267D8, 0xB42B23, 0xB8B2D5, 0x3EFE2E, 0xC54E89, 0x430272, 0x4F9B84,
+    0xC9D77F, 0x56A868, 0xD0E493, 0xDC7D65, 0x5A319E, 0x64CFB0, 0xE2834B, 0xEE1ABD, 0x685646, 0xF72951, 0x7165AA, 0x7DFC5C, 0xFBB0A7, 0x0CD1E9, 0x8A9D12, 0x8604E4, 0x00481F, 0x9F3708, 0x197BF3,
+    0x15E205, 0x93AEFE, 0xAD50D0, 0x2B1C2B, 0x2785DD, 0xA1C926, 0x3EB631, 0xB8FACA, 0xB4633C, 0x322FC7, 0xC99F60, 0x4FD39B, 0x434A6D, 0xC50696, 0x5A7981, 0xDC357A, 0xD0AC8C, 0x56E077, 0x681E59,
+    0xEE52A2, 0xE2CB54, 0x6487AF, 0xFBF8B8, 0x7DB443, 0x712DB5, 0xF7614E, 0x19A3D2, 0x9FEF29, 0x9376DF, 0x153A24, 0x8A4533, 0x0C09C8, 0x00903E, 0x86DCC5, 0xB822EB, 0x3E6E10, 0x32F7E6, 0xB4BB1D,
+    0x2BC40A, 0xAD88F1, 0xA11107, 0x275DFC, 0xDCED5B, 0x5AA1A0, 0x563856, 0xD074AD, 0x4F0BBA, 0xC94741, 0xC5DEB7, 0x43924C, 0x7D6C62, 0xFB2099, 0xF7B96F, 0x71F594, 0xEE8A83, 0x68C678, 0x645F8E,
+    0xE21375, 0x15723B, 0x933EC0, 0x9FA736, 0x19EBCD, 0x8694DA, 0x00D821, 0x0C41D7, 0x8A0D2C, 0xB4F302, 0x32BFF9, 0x3E260F, 0xB86AF4, 0x2715E3, 0xA15918, 0xADC0EE, 0x2B8C15, 0xD03CB2, 0x567049,
+    0x5AE9BF, 0xDCA544, 0x43DA53, 0xC596A8, 0xC90F5E, 0x4F43A5, 0x71BD8B, 0xF7F170, 0xFB6886, 0x7D247D, 0xE25B6A, 0x641791, 0x688E67, 0xEEC29C, 0x3347A4, 0xB50B5F, 0xB992A9, 0x3FDE52, 0xA0A145,
+    0x26EDBE, 0x2A7448, 0xAC38B3, 0x92C69D, 0x148A66, 0x181390, 0x9E5F6B, 0x01207C, 0x876C87, 0x8BF571, 0x0DB98A, 0xF6092D, 0x7045D6, 0x7CDC20, 0xFA90DB, 0x65EFCC, 0xE3A337, 0xEF3AC1, 0x69763A,
+    0x578814, 0xD1C4EF, 0xDD5D19, 0x5B11E2, 0xC46EF5, 0x42220E, 0x4EBBF8, 0xC8F703, 0x3F964D, 0xB9DAB6, 0xB54340, 0x330FBB, 0xAC70AC, 0x2A3C57, 0x26A5A1, 0xA0E95A, 0x9E1774, 0x185B8F, 0x14C279,
+    0x928E82, 0x0DF195, 0x8BBD6E, 0x872498, 0x016863, 0xFAD8C4, 0x7C943F, 0x700DC9, 0xF64132, 0x693E25, 0xEF72DE, 0xE3EB28, 0x65A7D3, 0x5B59FD, 0xDD1506, 0xD18CF0, 0x57C00B, 0xC8BF1C, 0x4EF3E7,
+    0x426A11, 0xC426EA, 0x2AE476, 0xACA88D, 0xA0317B, 0x267D80, 0xB90297, 0x3F4E6C, 0x33D79A, 0xB59B61, 0x8B654F, 0x0D29B4, 0x01B042, 0x87FCB9, 0x1883AE, 0x9ECF55, 0x9256A3, 0x141A58, 0xEFAAFF,
+    0x69E604, 0x657FF2, 0xE33309, 0x7C4C1E, 0xFA00E5, 0xF69913, 0x70D5E8, 0x4E2BC6, 0xC8673D, 0xC4FECB, 0x42B230, 0xDDCD27, 0x5B81DC, 0x57182A, 0xD154D1, 0x26359F, 0xA07964, 0xACE092, 0x2AAC69,
+    0xB5D37E, 0x339F85, 0x3F0673, 0xB94A88, 0x87B4A6, 0x01F85D, 0x0D61AB, 0x8B2D50, 0x145247, 0x921EBC, 0x9E874A, 0x18CBB1, 0xE37B16, 0x6537ED, 0x69AE1B, 0xEFE2E0, 0x709DF7, 0xF6D10C, 0xFA48FA,
+    0x7C0401, 0x42FA2F, 0xC4B6D4, 0xC82F22, 0x4E63D9, 0xD11CCE, 0x575035, 0x5BC9C3, 0xDD8538};
 } // namespace
 
 class UbloxMessageProcessor {
 public:
-  explicit UbloxMessageProcessor(
-      std::shared_ptr<ublox_driver::UbloxRosHandler> ros_handler = nullptr);
+  explicit UbloxMessageProcessor(std::shared_ptr<ublox_driver::UbloxRosHandler> ros_handler = nullptr);
 
   void process_data(const uint8_t *data, size_t len);
 
   static int check_ack(const uint8_t *data, size_t len);
 
-  static int build_config_msg(const std::vector<RcvConfigRecord> &rcv_configs, uint8_t *buff, uint32_t &msg_len);
+  static int build_config_msg(const std::vector<RcvConfigRecord> &rcv_configs, //
+                              uint8_t *buff,                                   //
+                              uint32_t &msg_len);
 
 private:
   //
   void parse_ion_utc(const uint8_t *data, const size_t header_len);
 
-  //
+  /** @brief 解析时间脉冲消息 */
   TimePulseInfoPtr parse_time_pulse(const uint8_t *msg_data, const uint32_t msg_len);
 
-  //
+  /** @brief 解析PVT的导航电文 */
   PVTSolutionPtr parse_pvt(const uint8_t *msg_data, const uint32_t msg_len);
 
+  /** @brief 解析卫星的原始观测数据 */
   std::vector<ObsPtr> parse_meas_msg(const uint8_t *msg_data, const uint32_t msg_len);
 
+  /** @brief 解析导航子帧，用于解码 GPS/BDS/GAL/GLO 星历 */
   EphemBasePtr parse_subframe(const uint8_t *msg_data, const uint32_t msg_len, std::vector<double> &iono_params);
 
+  /** @brief 解码GLONASS的导航子帧 */
   int decode_GLO_subframe(const uint8_t *msg_data, const uint32_t msg_len, GloEphemPtr glo_ephem);
   int decode_GLO_ephem(GloEphemPtr glo_ephem);
+
+  /** @brief 解码BDS的导航子帧 */
   int decode_BDS_subframe(const uint8_t *msg_data, const uint32_t msg_len, EphemPtr ephem, std::vector<double> &iono_params);
   int decode_BDS_D2_ephem(EphemPtr ephem);
   int decode_BDS_D1_ephem(EphemPtr ephem, std::vector<double> &iono_params);
+
+  /** @brief 解码GAL的导航子帧 */
   int decode_GAL_subframe(const uint8_t *msg_data, const uint32_t msg_len, EphemPtr ephem);
   int decode_GAL_ephem(EphemPtr ephem);
+
+  /** @brief 解码GPS的导航子帧 */
   int decode_GPS_subframe(const uint8_t *msg_data, const uint32_t msg_len, EphemPtr ephem);
   int decode_GPS_ephem(EphemPtr ephem);
 
-  /* freq index to frequency
-   * ---------------------------------------------------*/
+  /**
+   * @brief 频率索引 freq index to frequency
+   */
   double sig_freq(const int sys, const int sid, const int fcn);
 
-  /* signal index in obs data
-   * --------------------------------------------------*/
+  /**
+   * @brief
+   */
   int sig_idx(const int sys, const int code);
 
   /* ubx sigid to signal ([5] Appendix B)
@@ -162,6 +173,8 @@ private:
   /* ubx gnssid to system (ref [2] 25)
    * -----------------------------------------*/
   int ubx_sys(const int gnssid);
+
+  std::string ubx_sys_str(const int gnssid);
 
   /* test hamming code of glonass ephemeris string
    * ------------------------------- test hamming code of glonass ephemeris
@@ -197,20 +210,29 @@ private:
   uint32_t merge_two_u(const uint32_t a, const uint32_t b, const uint32_t n) const;
   int merge_two_s(const int a, const uint8_t b, const int n) const;
 
-  static bool check_checksum(const uint8_t *data, const uint32_t size);
   static bool verifyMsg(const uint8_t *data, const size_t len);
+
+  static bool check_checksum(const uint8_t *data, const uint32_t size);
+
   static void set_checksum(uint8_t *data, const uint32_t size);
 
 private:
+  // 当前GNSS系统的时间GPST
+  gtime_t curr_time;
+
+  // 卫星不同频段观测的锁定判断
+  using SAT_ID_TYPE = uint8_t;                                                    // 全局卫星编号
+  using SAT_SID_TYPE = uint8_t;                                                   // 当前卫星观测信号的槽位
+  std::map<SAT_ID_TYPE, std::map<SAT_SID_TYPE, double>> signal_track_lock_times_; // 卫星Track的锁定时间
+  std::map<SAT_ID_TYPE, std::map<SAT_SID_TYPE, uint8_t>> signal_track_state_;     // 接收机接收的卫星Track的反馈状态
+
   //
-  double lock_time_rec[MAX_SAT][N_FREQ]; /* lock time (s) */
-  uint8_t halfc_rec[MAX_SAT][N_FREQ];    /* half-cycle add flag */
   uint8_t subfrm[MAX_SAT][380];          /* subframe buffer */
   uint8_t bds_d1_subfrm_flags_[MAX_SAT]; /* BeiDou D1 subframe 1/2/3 received flags */
-  gtime_t curr_time;
+
   const uint32_t MSG_HEADER_LEN;
 
-  std::shared_ptr<ublox_driver::UbloxRosHandler> ros_handler_;
+  std::shared_ptr<ublox_driver::UbloxRosHandler> ros_handler_ = nullptr;
 };
 
 #endif

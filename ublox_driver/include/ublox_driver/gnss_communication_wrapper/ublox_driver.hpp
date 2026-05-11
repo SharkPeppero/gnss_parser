@@ -31,9 +31,12 @@ public:
   ~GNSSDriverManager();
 
 private:
+  /** @brief 启动时配置接收机 */
   bool configureReceiverAtStartup();
+
+  /** @brief  */
   void handleConfigAck(const uint8_t *data, size_t len);
-  void handlePvtSolution(const gnss_comm::PVTSolutionPtr &pvt_soln);
+
   void sendNtripGga();
   std::string buildNmeaGgaSentence(const gnss_comm::PVTSolution &pvt_soln) const;
   void logRtcmInputChunk(size_t len);
@@ -49,9 +52,10 @@ private:
 
   std::shared_ptr<SerialHandler> serial_handler_;                  // 串口模块
   std::shared_ptr<TcpClient> rtcm_client_;                         // RTCM客户端
-  std::shared_ptr<UbloxRosHandler> ros_handler_;                   // ROS管理层
+  std::shared_ptr<UbloxRosHandler> ros_handler_;                   // GNSS ROS管理层
   std::shared_ptr<UbloxMessageProcessor> ublox_message_processor_; // Ublox参数解析
 
+  //
   std::mutex ack_mutex_;
   std::condition_variable ack_cv_;
   int ack_flag_ = 0;
@@ -61,7 +65,7 @@ private:
   gnss_comm::PVTSolutionPtr latest_pvt_;
   rclcpp::TimerBase::SharedPtr ntrip_gga_timer_;
 
-  // RTCM
+  // RTCM差分数据
   std::mutex rtcm_log_mutex_;
   std::vector<uint8_t> rtcm_log_buffer_;
   uint64_t rtcm_input_chunk_count_ = 0;

@@ -12,6 +12,7 @@
 
 #include <gnss_comm/gnss_constant.hpp>
 #include <gnss_comm/gnss_ros.hpp>
+#include <gnss_comm/msg/rtcm_msg.hpp>
 #include <sensor_msgs/msg/nav_sat_fix.hpp>
 
 namespace ublox_driver {
@@ -40,6 +41,9 @@ public:
   /** @brief 发布PVT消息 */
   void publishPvt(const gnss_comm::PVTSolutionPtr &pvt_soln);
 
+  /** @brief 发布RTCM差分帧 */
+  void publishRtcm(const uint8_t *data, size_t len, uint16_t message_type, uint16_t payload_length);
+
   /** @brief  */
   void registerPvtCallback(std::function<void(const gnss_comm::PVTSolutionPtr &)> callback);
 
@@ -49,7 +53,7 @@ private:
   //
   rclcpp::CallbackGroup::SharedPtr cbg_pvt_;
   rclcpp::PublisherOptions pub_pvt_options_;
-  rclcpp::Publisher<gnss_interfaces::msg::GnssPVTSolnMsg>::SharedPtr pub_pvt_;
+  rclcpp::Publisher<gnss_comm::msg::GnssPVTSolnMsg>::SharedPtr pub_pvt_;
 
   //
   rclcpp::CallbackGroup::SharedPtr cbg_lla_;
@@ -59,27 +63,32 @@ private:
   //
   rclcpp::CallbackGroup::SharedPtr cbg_tp_info_;
   rclcpp::PublisherOptions pub_tp_info_options_;
-  rclcpp::Publisher<gnss_interfaces::msg::GnssTimePulseInfoMsg>::SharedPtr pub_tp_info_;
+  rclcpp::Publisher<gnss_comm::msg::GnssTimePulseInfoMsg>::SharedPtr pub_tp_info_;
 
   //
   rclcpp::CallbackGroup::SharedPtr cbg_range_meas_;
   rclcpp::PublisherOptions pub_range_meas_options_;
-  rclcpp::Publisher<gnss_interfaces::msg::GnssMeasMsg>::SharedPtr pub_range_meas_;
+  rclcpp::Publisher<gnss_comm::msg::GnssMeasMsg>::SharedPtr pub_range_meas_;
 
   //
   rclcpp::CallbackGroup::SharedPtr cbg_ephem_;
   rclcpp::PublisherOptions pub_ephem_options_;
-  rclcpp::Publisher<gnss_interfaces::msg::GnssEphemMsg>::SharedPtr pub_ephem_;
+  rclcpp::Publisher<gnss_comm::msg::GnssEphemMsg>::SharedPtr pub_ephem_;
 
   //
   rclcpp::CallbackGroup::SharedPtr cbg_glo_ephem_;
   rclcpp::PublisherOptions pub_glo_ephem_options_;
-  rclcpp::Publisher<gnss_interfaces::msg::GnssGloEphemMsg>::SharedPtr pub_glo_ephem_;
+  rclcpp::Publisher<gnss_comm::msg::GnssGloEphemMsg>::SharedPtr pub_glo_ephem_;
 
   //
   rclcpp::CallbackGroup::SharedPtr cbg_iono_;
   rclcpp::PublisherOptions pub_iono_options_;
-  rclcpp::Publisher<gnss_interfaces::msg::StampedFloat64Array>::SharedPtr pub_iono_;
+  rclcpp::Publisher<gnss_comm::msg::StampedFloat64Array>::SharedPtr pub_iono_;
+
+  //
+  rclcpp::CallbackGroup::SharedPtr cbg_rtcm_;
+  rclcpp::PublisherOptions pub_rtcm_options_;
+  rclcpp::Publisher<gnss_comm::msg::RtcmMsg>::SharedPtr pub_rtcm_;
 
   //
   std::vector<std::function<void(const gnss_comm::PVTSolutionPtr &)>> pvt_callbacks_;
