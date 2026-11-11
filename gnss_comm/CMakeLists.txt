@@ -12,6 +12,8 @@ find_package(geometry_msgs REQUIRED)
 find_package(gnss_msg REQUIRED)
 find_package(Eigen3 REQUIRED)
 find_package(glog REQUIRED)
+find_package(OpenCV REQUIRED COMPONENTS core imgproc)
+find_package(fusion_location_utils REQUIRED)
 
 file(GLOB_RECURSE source_files CONFIGURE_DEPENDS ${PROJECT_SOURCE_DIR}/src/*.cpp)
 add_library(${PROJECT_NAME}_core ${source_files})
@@ -33,9 +35,11 @@ target_link_libraries(${PROJECT_NAME}_core
 )
 
 add_executable(spp_solver_node apps/spp_solver_node.cpp)
-target_link_libraries(spp_solver_node ${PROJECT_NAME}_core)
-ament_target_dependencies(spp_solver_node rclcpp gnss_msg sensor_msgs geometry_msgs)
+target_link_libraries(spp_solver_node ${PROJECT_NAME}_core ${OpenCV_LIBS})
+target_include_directories(spp_solver_node PRIVATE ${OpenCV_INCLUDE_DIRS})
+ament_target_dependencies(spp_solver_node rclcpp gnss_msg sensor_msgs geometry_msgs fusion_location_utils)
 install(TARGETS spp_solver_node DESTINATION lib/${PROJECT_NAME})
+install(DIRECTORY config launch rviz_cfg DESTINATION share/${PROJECT_NAME})
 
 install(
   DIRECTORY include/

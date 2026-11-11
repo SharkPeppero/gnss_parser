@@ -16,6 +16,13 @@
   <depend>geometry_msgs</depend>
   <depend>libgoogle-glog-dev</depend>
   <depend>gnss_msg</depend>
+  <depend>libopencv-dev</depend>
+  <depend>fusion_location_utils</depend>
+
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+  <exec_depend>ros2bag</exec_depend>
+  <exec_depend>rviz2</exec_depend>
 
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>

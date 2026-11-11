@@ -1,0 +1,6 @@
+# spp_solver_node 算法参数
+spp_solver_node:
+  ros__parameters:
+    elevation_cutoff_degree: 15.0   # 截止高度角 [deg]，取值 [0, 90)
+    max_iterations: 30              # 伪距最小二乘最大迭代次数，> 0
+    convergence_threshold: 1.0e-4   # 状态增量范数收敛阈值，取值 (0, 1)
