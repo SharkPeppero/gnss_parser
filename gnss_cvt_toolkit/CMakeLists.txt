@@ -11,6 +11,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 find_package(ament_cmake REQUIRED)
 find_package(gnss_comm REQUIRED)
+find_package(gnss_msg REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(rosbag2_cpp REQUIRED)
 find_package(rosbag2_storage REQUIRED)
@@ -18,6 +19,7 @@ find_package(rosbag2_storage REQUIRED)
 add_executable(bag2rinex src/bag2rinex.cpp)
 ament_target_dependencies(bag2rinex
   gnss_comm
+  gnss_msg
   rclcpp
   rosbag2_cpp
   rosbag2_storage
@@ -26,6 +28,7 @@ ament_target_dependencies(bag2rinex
 add_executable(bag2rtk_solution src/bag2rtk_solution.cpp)
 ament_target_dependencies(bag2rtk_solution
   gnss_comm
+  gnss_msg
   rclcpp
   rosbag2_cpp
   rosbag2_storage

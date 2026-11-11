@@ -7,7 +7,7 @@
 #include <rosbag2_cpp/reader.hpp>
 #include <rosbag2_storage/storage_filter.hpp>
 
-#include <gnss_comm/gnss_ros.hpp>
+#include <gnss_comm/ros/conversion.hpp>
 #include <gnss_comm/rinex_helper.hpp>
 
 namespace
@@ -42,8 +42,8 @@ std::vector<std::vector<gnss_comm::ObsPtr>> parse_gnss_meas(
       continue;
     }
 
-    auto obs_msg = read_message<gnss_comm::msg::GnssMeasMsg>(bag_message);
-    result.push_back(gnss_comm::msg2meas(std::make_shared<gnss_comm::msg::GnssMeasMsg>(std::move(obs_msg))));
+    auto obs_msg = read_message<gnss_msg::msg::GnssMeasMsg>(bag_message);
+    result.push_back(gnss_comm::msg2meas(std::make_shared<gnss_msg::msg::GnssMeasMsg>(std::move(obs_msg))));
   }
   return result;
 }

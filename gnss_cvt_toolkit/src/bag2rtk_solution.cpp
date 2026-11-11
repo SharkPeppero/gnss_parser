@@ -9,7 +9,7 @@
 #include <rosbag2_cpp/reader.hpp>
 #include <rosbag2_storage/storage_filter.hpp>
 
-#include <gnss_comm/gnss_ros.hpp>
+#include <gnss_comm/ros/conversion.hpp>
 #include <gnss_comm/gnss_utility.hpp>
 
 namespace
@@ -58,8 +58,8 @@ void extract_rtk_states(
       continue;
     }
 
-    auto pvt_msg = read_message<gnss_comm::msg::GnssPVTSolnMsg>(bag_message);
-    auto pvt = gnss_comm::msg2pvt(std::make_shared<gnss_comm::msg::GnssPVTSolnMsg>(std::move(pvt_msg)));
+    auto pvt_msg = read_message<gnss_msg::msg::GnssPVTSolnMsg>(bag_message);
+    auto pvt = gnss_comm::msg2pvt(std::make_shared<gnss_msg::msg::GnssPVTSolnMsg>(std::move(pvt_msg)));
 
     auto rtk_state = std::make_shared<RTKState>();
     rtk_state->gnss_ts_ns = static_cast<uint64_t>(gnss_comm::time2sec(pvt->time) * 1e9);
