@@ -139,24 +139,57 @@ RtkSolution RtkSolverPipeline::solve(const std::vector<ObsPtr> &rover_obs,      
   update_ambiguities(dds, sol.time, base_changed);
   std::vector<bool> phase_used;
   sol.num_dd_cp = ekf_update(dds, phase_used);
-  if (sol.num_dd_cp < 4)
+
+  // 7. 滤波器保护：浮点位置连续多个历元偏离伪距差分解（不可用时为 SPP）过远，或载波双差长时间不足时重置，本历元输出伪距差分/单点解。
+  const Eigen::Vector3d check_pos = has_dgnss ? dgnss_pos : Eigen::Vector3d(spp_state.head<3>());
+  const double pos_diff = (x_.head<3>() - check_pos).norm();
+  diverge_count_ = pos_diff > options_.reset_pos_diff_m ? diverge_count_ + 1 : 0;
+  if (sol.num_dd_cp >= options_.reset_min_phase_dd) {
+    low_phase_ = false;
+  } else if (!low_phase_) {
+    low_phase_ = true;
+    low_phase_since_ = sol.time;
+  }
+  const bool low_phase_timeout = low_phase_ && time_diff(sol.time, low_phase_since_) > options_.reset_low_phase_s;
+  if (!x_.head<3>().allFinite() || diverge_count_ >= options_.reset_diverge_epochs || low_phase_timeout) {
+    LOG(WARNING) << "[gnss_comm::RtkSolverPipeline::solve] reset filter: " << (low_phase_timeout ? "too few phase DD" : "float diverged") << ", float vs "
+                 << (has_dgnss ? "DGNSS" : "SPP") << " = " << pos_diff << " m, phase DD = " << sol.num_dd_cp;
+    reset_filter(check_pos, has_dgnss ? dgnss_cov : Eigen::Matrix3d(Eigen::Matrix3d::Identity() * 100.0));
+    sol.num_dd_cp = 0;
     return sol;
+  }
+  if (sol.num_dd_cp < 4) {
+    fix_count_ = 0;
+    return sol;
+  }
   sol.pos_ecef = x_.head<3>();
   sol.pos_cov_ecef = P_.topLeftCorner<3, 3>();
   sol.pos_type = PV_NARROW_FLOAT;
 
-  // 7. LAMBDA 固定（含部分固定）；成功且开启 fix-and-hold 时把整数解约束回滤波器。
+  // 8. LAMBDA 固定（含部分固定）+ ratio/残差检验；连续固定足够多历元后才把整数解约束回滤波器。
   Eigen::Vector3d fix_pos;
   Eigen::Matrix3d fix_cov;
   std::vector<std::pair<int, int>> fixed_pairs;
   Eigen::VectorXd fixed_amb;
-  if (fix_ambiguity(dds, phase_used, fix_pos, fix_cov, sol.ratio, fixed_pairs, fixed_amb)) {
+  bool searched = false;
+  if (fix_ambiguity(dds, phase_used, fix_pos, fix_cov, sol.ratio, fixed_pairs, fixed_amb, searched)) {
     sol.pos_ecef = fix_pos;
     sol.pos_cov_ecef = fix_cov;
     sol.pos_type = PV_NARROW_INT;
     sol.num_fix_dd = fixed_pairs.size();
-    if (options_.fix_and_hold)
+    ++fix_count_;
+    if (options_.fix_and_hold && fix_count_ >= options_.hold_min_fix_epochs) {
       hold_ambiguity(fixed_pairs, fixed_amb);
+      held_ = true;
+    }
+  } else {
+    fix_count_ = 0;
+    // hold 过的模糊度检验不通过，说明之前锁住的整数可能是错的：清空模糊度，让其从浮点重新收敛。
+    if (held_ && searched) {
+      LOG(WARNING) << "[gnss_comm::RtkSolverPipeline::solve] held ambiguities failed validation, re-initializing ambiguities";
+      clear_ambiguities();
+      held_ = false;
+    }
   }
   return sol;
 }
@@ -289,39 +322,69 @@ bool RtkSolverPipeline::dd_psr_pos(const std::vector<DdMeasurement> &dds, Eigen:
 
   // 双差协方差：对角 σ_j² + σ_r²，同组观测共享参考星项 σ_r²；系数 2 对应流动站与基站各一份非差误差。
   const double var0 = 2.0 * options_.code_std_m * options_.code_std_m;
-  Eigen::MatrixXd R = Eigen::MatrixXd::Zero(n, n);
-  for (size_t i = 0; i < n; ++i) {
-    R(i, i) = var0 * (dds[i].var_factor_sat + dds[i].var_factor_ref);
-    for (size_t k = i + 1; k < n; ++k)
-      if (dds[k].sys == dds[i].sys && dds[k].band == dds[i].band)
-        R(i, k) = R(k, i) = var0 * dds[i].var_factor_ref;
-  }
-  const Eigen::MatrixXd W = R.inverse();
+  std::vector<size_t> active(n);
+  for (size_t i = 0; i < n; ++i)
+    active[i] = i;
+  const size_t max_reject = n / 3;
 
-  Eigen::Matrix3d N = Eigen::Matrix3d::Identity();
-  double dx_norm = 1.0;
-  uint32_t num_iter = 0;
-  while (num_iter < options_.max_iterations && dx_norm > options_.convergence_threshold) {
-    // “预测值−观测值”残差，与 SPP 相同的符号约定。
-    Eigen::VectorXd res(n);
-    Eigen::MatrixXd J(n, 3);
-    for (size_t i = 0; i < n; ++i) {
-      const DdMeasurement &dd = dds[i];
-      res(i) = geo_range(dd.sat_pos, pos) - geo_range(dd.ref_sat_pos, pos) - dd.base_sd_range_m - dd.dd_psr_m;
-      J.row(i) = -((dd.sat_pos - pos).normalized() - (dd.ref_sat_pos - pos).normalized()).transpose();
+  while (true) {
+    const size_t m = active.size();
+    Eigen::MatrixXd R = Eigen::MatrixXd::Zero(m, m);
+    for (size_t i = 0; i < m; ++i) {
+      const DdMeasurement &di = dds[active[i]];
+      R(i, i) = var0 * (di.var_factor_sat + di.var_factor_ref);
+      for (size_t k = i + 1; k < m; ++k) {
+        const DdMeasurement &dk = dds[active[k]];
+        if (dk.sys == di.sys && dk.band == di.band)
+          R(i, k) = R(k, i) = var0 * di.var_factor_ref;
+      }
     }
-    N = J.transpose() * W * J;
-    const Eigen::Vector3d dx = -N.ldlt().solve(J.transpose() * W * res);
-    dx_norm = dx.norm();
-    pos += dx;
-    ++num_iter;
+    const Eigen::MatrixXd W = R.inverse();
+
+    Eigen::Matrix3d N = Eigen::Matrix3d::Identity();
+    Eigen::VectorXd res(m);
+    double dx_norm = 1.0;
+    uint32_t num_iter = 0;
+    while (num_iter < options_.max_iterations && dx_norm > options_.convergence_threshold) {
+      // “预测值−观测值”残差，与 SPP 相同的符号约定。
+      Eigen::MatrixXd J(m, 3);
+      for (size_t i = 0; i < m; ++i) {
+        const DdMeasurement &dd = dds[active[i]];
+        res(i) = geo_range(dd.sat_pos, pos) - geo_range(dd.ref_sat_pos, pos) - dd.base_sd_range_m - dd.dd_psr_m;
+        J.row(i) = -((dd.sat_pos - pos).normalized() - (dd.ref_sat_pos - pos).normalized()).transpose();
+      }
+      N = J.transpose() * W * J;
+      const Eigen::Vector3d dx = -N.ldlt().solve(J.transpose() * W * res);
+      dx_norm = dx.norm();
+      pos += dx;
+      ++num_iter;
+    }
+    if (dx_norm > options_.convergence_threshold) {
+      LOG(WARNING) << "[gnss_comm::RtkSolverPipeline::dd_psr_pos] DD pseudorange solver reached maximum iterations.\n";
+      return false;
+    }
+    if (!pos.allFinite())
+      return false;
+    cov = N.inverse();
+
+    // 粗差剔除：收敛位置处的残差按各自 σ 标准化，最大者超限则剔除后重解。
+    if (n - m >= max_reject || m <= 5)
+      return true;
+    size_t worst = 0;
+    double worst_norm = 0.0;
+    for (size_t i = 0; i < m; ++i) {
+      const DdMeasurement &dd = dds[active[i]];
+      const double r = geo_range(dd.sat_pos, pos) - geo_range(dd.ref_sat_pos, pos) - dd.base_sd_range_m - dd.dd_psr_m;
+      const double r_norm = std::abs(r) / std::sqrt(R(i, i));
+      if (r_norm > worst_norm) {
+        worst_norm = r_norm;
+        worst = i;
+      }
+    }
+    if (worst_norm <= options_.psr_outlier_sigma)
+      return true;
+    active.erase(active.begin() + static_cast<long>(worst));
   }
-  if (dx_norm > options_.convergence_threshold) {
-    LOG(WARNING) << "[gnss_comm::RtkSolverPipeline::dd_psr_pos] DD pseudorange solver reached maximum iterations.\n";
-    return false;
-  }
-  cov = N.inverse();
-  return pos.allFinite();
 }
 
 void RtkSolverPipeline::reset_filter(const Eigen::Vector3d &pos, const Eigen::Matrix3d &cov) {
@@ -332,6 +395,10 @@ void RtkSolverPipeline::reset_filter(const Eigen::Vector3d &pos, const Eigen::Ma
   P_.block<3, 3>(3, 3) = Eigen::Matrix3d::Identity() * 100.0; // 速度未知，10 m/s
   ambs_.clear();
   initialized_ = true;
+  fix_count_ = 0;
+  held_ = false;
+  diverge_count_ = 0;
+  low_phase_ = false;
 }
 
 void RtkSolverPipeline::predict(const double dt) {
@@ -502,12 +569,14 @@ uint32_t RtkSolverPipeline::ekf_update(const std::vector<DdMeasurement> &dds, st
 
 bool RtkSolverPipeline::fix_ambiguity(const std::vector<DdMeasurement> &dds, const std::vector<bool> &phase_used, //
                                       Eigen::Vector3d &pos, Eigen::Matrix3d &cov, double &ratio,                 //
-                                      std::vector<std::pair<int, int>> &fixed_pairs, Eigen::VectorXd &fixed_amb) const {
+                                      std::vector<std::pair<int, int>> &fixed_pairs, Eigen::VectorXd &fixed_amb, bool &searched) const {
   ratio = 0;
-  // 候选双差模糊度：(本星状态下标, 参考星状态下标, 本星定权系数 1/sin²E)；低高度角排在前面，部分固定时先剔除。
+  searched = false;
+  // 候选双差模糊度：(本星状态下标, 参考星状态下标, 本星定权系数 1/sin²E, dds 下标)；低高度角排在前面，部分固定时先剔除。
   struct Candidate {
     int sat_idx, ref_idx;
     double var_factor;
+    size_t dd;
   };
   std::vector<Candidate> cands;
   for (size_t i = 0; i < dds.size(); ++i) {
@@ -515,14 +584,16 @@ bool RtkSolverPipeline::fix_ambiguity(const std::vector<DdMeasurement> &dds, con
       continue;
     const auto sat_it = ambs_.find({dds[i].sat, dds[i].band}), ref_it = ambs_.find({dds[i].ref_sat, dds[i].band});
     if (sat_it != ambs_.end() && ref_it != ambs_.end())
-      cands.push_back({sat_it->second.idx, ref_it->second.idx, dds[i].var_factor_sat});
+      cands.push_back({sat_it->second.idx, ref_it->second.idx, dds[i].var_factor_sat, i});
   }
   std::sort(cands.begin(), cands.end(), [](const Candidate &a, const Candidate &b) { return a.var_factor > b.var_factor; });
 
   const int n = static_cast<int>(x_.size());
+  // 部分固定最少保留的双差数：不少于 min_fix_dd，也不少于候选总数的 par_min_fix_fraction
+  const int min_na = std::max(static_cast<int>(options_.min_fix_dd), static_cast<int>(std::ceil(options_.par_min_fix_fraction * cands.size())));
   for (size_t drop = 0; drop < cands.size(); ++drop) {
     const int na = static_cast<int>(cands.size() - drop);
-    if (na < static_cast<int>(options_.min_fix_dd))
+    if (na < min_na)
       return false;
     // 双差模糊度 a = D·x，D 每行在本星处 +1、参考星处 −1。
     Eigen::MatrixXd D = Eigen::MatrixXd::Zero(na, n);
@@ -534,16 +605,26 @@ bool RtkSolverPipeline::fix_ambiguity(const std::vector<DdMeasurement> &dds, con
     const Eigen::MatrixXd Qa = D * P_ * D.transpose();
     Eigen::MatrixXd F;
     Eigen::VectorXd s;
-    const bool searched = lambda(a, Qa, 2, F, s);
-    const double this_ratio = searched ? s(1) / std::max(s(0), 1e-12) : 0.0;
+    const bool ok = lambda(a, Qa, 2, F, s);
+    searched = true;
+    const double this_ratio = ok ? s(1) / std::max(s(0), 1e-12) : 0.0;
     if (drop == 0)
       ratio = this_ratio; // 未能固定时报告全集 ratio
-    if (searched && this_ratio >= options_.min_ratio) {
+    if (ok && this_ratio >= options_.min_ratio) {
       // 固定解回代：x_b = x_b − P_ba·Q_a⁻¹·(a − ǎ)，P_b = P_bb − P_ba·Q_a⁻¹·P_ab，b 为位置。
       const Eigen::MatrixXd Pba = P_.topRows(3) * D.transpose();
       const Eigen::LDLT<Eigen::MatrixXd> Qa_ldlt(Qa);
       pos = x_.head<3>() - Pba * Qa_ldlt.solve(a - F.col(0));
       cov = P_.topLeftCorner<3, 3>() - Pba * Qa_ldlt.solve(Pba.transpose());
+      // hold 后 ratio 会虚高，再用固定解的载波残差独立检验一次
+      std::vector<size_t> dd_indices;
+      for (int k = 0; k < na; ++k)
+        dd_indices.push_back(cands[drop + k].dd);
+      if (!pos.allFinite() || !validate_fix(dds, dd_indices, pos, F.col(0))) {
+        if (!options_.par_enabled)
+          return false;
+        continue;
+      }
       ratio = this_ratio;
       fixed_pairs.clear();
       for (int k = 0; k < na; ++k)
@@ -555,6 +636,21 @@ bool RtkSolverPipeline::fix_ambiguity(const std::vector<DdMeasurement> &dds, con
       return false;
   }
   return false;
+}
+
+bool RtkSolverPipeline::validate_fix(const std::vector<DdMeasurement> &dds, const std::vector<size_t> &dd_indices, const Eigen::Vector3d &pos,
+                                     const Eigen::VectorXd &dd_amb) const {
+  // 方差与 ekf_update 的载波行一致：2·(σ_φ² + 基线比例项²)·(1/sin²E_j + 1/sin²E_r)
+  const double baseline_std = options_.baseline_std_ppm * 1e-6 * (pos - base_ecef_).norm();
+  const double var0 = 2.0 * (options_.phase_std_m * options_.phase_std_m + baseline_std * baseline_std);
+  for (size_t k = 0; k < dd_indices.size(); ++k) {
+    const DdMeasurement &dd = dds[dd_indices[k]];
+    const double rho = geo_range(dd.sat_pos, pos) - geo_range(dd.ref_sat_pos, pos) - dd.base_sd_range_m;
+    const double res = dd.dd_cp_m - rho - dd.wavelength_m * dd_amb(static_cast<int>(k));
+    if (std::abs(res) > options_.fix_validate_sigma * std::sqrt(var0 * (dd.var_factor_sat + dd.var_factor_ref)))
+      return false;
+  }
+  return true;
 }
 
 void RtkSolverPipeline::hold_ambiguity(const std::vector<std::pair<int, int>> &fixed_pairs, const Eigen::VectorXd &fixed_amb) {
@@ -605,6 +701,13 @@ void RtkSolverPipeline::add_ambiguity(const AmbKey &key, const double value_cycl
   P_.col(n).setZero();
   P_(n, n) = var_cycles2;
   ambs_[key] = {n, time};
+}
+
+void RtkSolverPipeline::clear_ambiguities() {
+  // 状态按 [位置, 速度, 模糊度...] 排列，conservativeResize 保留左上角的位置/速度块。
+  x_.conservativeResize(6);
+  P_.conservativeResize(6, 6);
+  ambs_.clear();
 }
 
 void RtkSolverPipeline::remove_ambiguity(const AmbKey &key) {

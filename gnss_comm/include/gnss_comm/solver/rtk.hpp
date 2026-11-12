@@ -42,8 +42,20 @@ struct RtkSolverPipelineOptions {
   double min_ratio = 3.0;       // LAMBDA ratio 检验阈值
   uint32_t min_fix_dd = 5;      // 参与固定的最少双差模糊度个数
   bool par_enabled = true;      // 全集固定失败时，按高度角从低到高逐个剔除再试（部分模糊度固定）
+  // 部分固定时参与固定的双差数至少占候选总数的比例；剔得过多时只剩少数双差，误固定概率很高，残差检验也查不出
+  double par_min_fix_fraction = 0.9;
   bool fix_and_hold = true;     // 固定成功后把整数双差作为强约束回写滤波器
   double hold_std_cycles = 1e-3; // fix-and-hold 伪观测标准差，周
+  // hold 之后浮点模糊度被整数约束，ratio 会虚高而失去检验意义：连续固定达到该历元数才开始 hold，避免一次误固定被锁死
+  uint32_t hold_min_fix_epochs = 10;
+  double fix_validate_sigma = 4.0; // 固定解回代后各双差载波残差超过 k·σ 则拒绝该组固定（不依赖 ratio）
+
+  // 滤波器保护
+  double reset_pos_diff_m = 30.0;  // 浮点位置与伪距差分解（不可用时为 SPP）相差超过该值……
+  uint32_t reset_diverge_epochs = 5; // ……且连续达到该历元数时重置滤波器；伪距差分解单历元可能被多路径拉偏
+  double psr_outlier_sigma = 4.0;  // 双差伪距定位迭代剔除标准化残差超过 k·σ 的观测
+  uint32_t reset_min_phase_dd = 5; // 参与更新的载波双差少于该值……
+  double reset_low_phase_s = 10.0; // ……且持续超过该时长时重置滤波器，s
 };
 
 // 基站各（星座, 频段）的天线相位中心偏移，ECEF m，相对天线参考点；QZSS 按 GPS 查。
@@ -91,7 +103,8 @@ public:
   ~RtkSolverPipeline() = default;
 
   // 流动站 SPP → 双差构建（含两站对流层改正）→ 双差伪距定位（初值/退化解）→ EKF 预测 → GF 周跳探测
-  // → 模糊度管理 → 双差伪距+载波更新 → LAMBDA（失败时部分固定）与 ratio 检验 → 固定解回代 → fix-and-hold。
+  // → 模糊度管理 → 双差伪距+载波更新 → 发散/载波不足检查（必要时重置）
+  // → LAMBDA（失败时部分固定）与 ratio + 残差检验 → 固定解回代 → 连续固定足够后 fix-and-hold。
   // rover_obs 与 rover_ephems 等长且按卫星逐项对应；base_obs 为匹配好的基站历元，基站卫星星历取自流动站。
   // 失败时 pos_type 为 PV_NONE；双差不可用时退回 PV_SINGLE。
   // TODO: GLONASS 频间偏差、接收机天线 PCV。
@@ -115,6 +128,7 @@ private:
   };
 
   // 双差伪距加权最小二乘；权阵为双差协方差的逆（同组共享参考星，非对角）。
+  // 收敛后逐个剔除标准化残差最大且超过 psr_outlier_sigma 的观测再解，最多剔除 1/3 且至少保留 5 个。
   // pos 输入为初值、输出为结果；cov 为位置协方差，m²。
   bool dd_psr_pos(const std::vector<DdMeasurement> &dds, Eigen::Vector3d &pos, Eigen::Matrix3d &cov) const;
 
@@ -136,17 +150,23 @@ private:
   // 基站只在 base_changed 时比较。返回 卫星 → 周跳位（bit0 流动站，bit1 基站）。
   std::map<uint32_t, uint8_t> detect_slips_gf(const std::vector<ObsPtr> &rover_obs, const std::vector<ObsPtr> &base_obs, bool base_changed);
 
-  // 对本历元参与更新的双差模糊度做 LAMBDA；全集 ratio 不通过且允许部分固定时，按高度角从低到高逐个剔除再试。
+  // 对本历元参与更新的双差模糊度做 LAMBDA；ratio 或残差检验不通过且允许部分固定时，按高度角从低到高逐个剔除再试。
   // 通过时输出固定后的位置及协方差，以及固定所用的模糊度状态下标对（本星, 参考星）与整数解，供 fix-and-hold 使用。
+  // searched 表示至少对一组 >= min_fix_dd 的模糊度做过搜索（区分“检验不通过”与“模糊度太少”）。
   bool fix_ambiguity(const std::vector<DdMeasurement> &dds, const std::vector<bool> &phase_used, //
                      Eigen::Vector3d &pos, Eigen::Matrix3d &cov, double &ratio,                 //
-                     std::vector<std::pair<int, int>> &fixed_pairs, Eigen::VectorXd &fixed_amb) const;
+                     std::vector<std::pair<int, int>> &fixed_pairs, Eigen::VectorXd &fixed_amb, bool &searched) const;
+
+  // 固定解检验：用固定位置和整数双差模糊度计算各双差载波残差，全部在 fix_validate_sigma·σ 内才通过。
+  bool validate_fix(const std::vector<DdMeasurement> &dds, const std::vector<size_t> &dd_indices, const Eigen::Vector3d &pos, const Eigen::VectorXd &dd_amb) const;
 
   // fix-and-hold：以固定的整数双差为伪观测（标准差 hold_std_cycles）更新滤波器。
   void hold_ambiguity(const std::vector<std::pair<int, int>> &fixed_pairs, const Eigen::VectorXd &fixed_amb);
 
   void add_ambiguity(const AmbKey &key, double value_cycles, double var_cycles2, const gtime_t &time);
   void remove_ambiguity(const AmbKey &key);
+  // 删除全部模糊度状态，保留位置/速度，让模糊度从浮点重新收敛。
+  void clear_ambiguities();
 
   // 基站在某（分组星座, 频段）上的相位中心 = ARP + PCO。
   Eigen::Vector3d base_phase_center(uint32_t sys, int band) const;
@@ -170,6 +190,13 @@ private:
   Eigen::MatrixXd P_;
   std::map<AmbKey, AmbState> ambs_;
   gtime_t last_time_{}, last_base_time_{};
+
+  // 固定与保护状态，reset_filter 时清零
+  uint32_t fix_count_ = 0;      // 连续固定历元数
+  bool held_ = false;           // 模糊度已被 fix-and-hold 约束过
+  uint32_t diverge_count_ = 0;  // 浮点位置连续超出 reset_pos_diff_m 的历元数
+  bool low_phase_ = false;      // 载波双差不足计时中
+  gtime_t low_phase_since_{};   // 载波双差开始不足的时刻
 };
 
 } // namespace gnss_comm

@@ -137,7 +137,10 @@ $$
 
 ### 重置与预测
 
-- **重置**：首历元、时间倒退、或历元间隔超过 `max_gap_s` 时触发。位置与协方差取伪距差分解；速度置零，方差为 (10 m/s)²；清空模糊度。没有伪距差分解时无法重置，只输出 SPP。
+- **重置**：首历元、时间倒退、或历元间隔超过 `max_gap_s` 时触发。位置与协方差取伪距差分解；速度置零，方差为 (10 m/s)²；清空模糊度，连续固定计数和 hold 标志清零。没有伪距差分解时无法重置，只输出 SPP。
+- **发散保护**（量测更新之后检查，触发时同样重置，本历元输出伪距差分/单点解）：
+  - 浮点位置与本历元伪距差分解相差超过 `reset_pos_diff_m`（默认 30 m），且连续 `reset_diverge_epochs`（默认 5）个历元都超限（单历元的伪距差分解在城市多路径下可能偏几十米，不能据此立即重置）；伪距差分不可用时与 SPP 比较。此时按伪距差分解重置，没有伪距差分解时用 SPP 位置、(10 m)² 方差重置。
+  - 参与更新的载波双差少于 `reset_min_phase_dd`（默认 5），且持续超过 `reset_low_phase_s`（默认 10 s）。
 - **预测**：匀速模型 r ← r + v·Δt。过程噪声按白噪声加速度离散化，每个轴独立，q\_a = `accel_std_mps2`²；模糊度对角元加随机游走 `amb_process_std_cycles`²·Δt。
 
 $$
@@ -190,7 +193,7 @@ $$
 
 ## 模糊度固定
 
-每个历元都对本历元参与更新的双差模糊度做 MLAMBDA 搜索。所有模糊度一起固定失败时，再试部分固定。ratio 不小于 `min_ratio` 时输出固定解；开启 `fix_and_hold` 时，还把固定的整数双差约束回滤波器。
+每个历元都对本历元参与更新的双差模糊度做 MLAMBDA 搜索。所有模糊度一起固定失败时，再试部分固定。ratio 不小于 `min_ratio`、且固定解的载波残差检验通过时输出固定解；开启 `fix_and_hold` 且连续固定达到 `hold_min_fix_epochs` 个历元后，才把固定的整数双差约束回滤波器。
 
 1. **单差 → 双差**。用矩阵 D 从状态中取出双差模糊度。D 每行对应一个载波双差：在本星处为 +1，在参考星处为 −1。
 
@@ -211,11 +214,18 @@ $$
    $$
 
    其中 P\_ba = P\_{r,·}Dᵀ，是位置与双差模糊度的互协方差。
+6. **残差检验**（`fix_validate_sigma`）。用固定位置 b̌ 和整数解 ǎ 计算每个参与固定的双差载波残差，任一超过 k·σ（k 默认 4，σ 与量测更新中该载波行的标准差相同）即拒绝这组固定，按部分固定继续剔除：
+
+   $$
+   v_i = \nabla\Delta\phi_i\,\lambda_i - \nabla\Delta\rho_i(\check{\mathbf{b}}) - \lambda_i\,\check{a}_i, \qquad |v_i| \le k\,\sigma_i
+   $$
+
+   hold 之后浮点模糊度已经被整数约束，Q 很小，ratio 会虚高到 10⁸ 量级，失去检验意义；残差检验直接看原始载波观测，不受 hold 影响。
 
 **部分模糊度固定（`par_enabled`）**
 
 - 候选双差按本星的定权系数 1/sin²E 排序，高度角低的排在前面。
-- 所有模糊度一起固定失败后，每次剔除一个高度角最低的双差，重新构造 D、做 LAMBDA，直到 ratio 通过，或剩余个数少于 `min_fix_dd`。
+- 所有模糊度一起固定失败后，每次剔除一个高度角最低的双差，重新构造 D、做 LAMBDA，直到 ratio 通过，或剩余个数少于 max(`min_fix_dd`, ⌈`par_min_fix_fraction`·候选数⌉)。只剩少数双差时 ratio 容易通过，残差检验又只覆盖参与固定的双差，误固定很难发现，所以要限制剔除比例。
 - 固定成功时，`ratio` 取通过的那一组的值，`num_fix_dd` 记录固定的个数。失败时，`ratio` 报告所有模糊度一起搜索时的值。
 
 **fix-and-hold（`fix_and_hold`）**
@@ -227,7 +237,10 @@ $$
 $$
 
 - 更新后，滤波器里的模糊度和位置都贴近固定解，后续历元在此基础上继续，固定会更连续。
-- 代价是一旦误固定就会被持续保持，要等到该星发生周跳、长时间未观测，或滤波器重置才会恢复。误固定多时，先关掉 `fix_and_hold` 或提高 `min_ratio`。
+- 代价是误固定一旦被 hold，就会持续保持。为此做了两层保护：
+  - 连续固定达到 `hold_min_fix_epochs`（默认 10）个历元才开始 hold，任一历元未固定则计数清零，避免单次误固定被立刻锁住；
+  - hold 过的滤波器若某历元做了搜索却没有通过 ratio / 残差检验，认为锁住的整数可能是错的，清空全部模糊度（保留位置、速度），从浮点重新收敛。
+- `hold_std_cycles` 默认 1e-3 周很紧，RTKLIB 对应约 0.03 周；误固定仍多时可放宽到 0.03，或关掉 `fix_and_hold`。
 
 ## 输出
 
@@ -287,8 +300,16 @@ timestamp,x,y,z,lat,lon,alt,pos_type,num_dd_psr,num_dd_cp,base_age_s,ratio,num_f
 | `rtk.min_ratio` | 3.0 | — | LAMBDA ratio 阈值，≥ 1 | 误固定多时提高 |
 | `rtk.min_fix_dd` | 5 | 个 | 参与固定的最少双差模糊度数，也是部分固定的下限 | — |
 | `rtk.par_enabled` | true | — | 全集失败时按高度角从低到高剔除再试 | — |
+| `rtk.par_min_fix_fraction` | 0.9 | — | 部分固定至少保留候选双差的比例 | 固定率过低时降到 0.8；HKUST 数据中 ≤0.7 时误固定约 90% |
 | `rtk.fix_and_hold` | true | — | 固定后把整数双差约束回滤波器 | 误固定多时先关掉 |
-| `rtk.hold_std_cycles` | 1.0e-3 | 周 | fix-and-hold 伪观测标准差 | 想让约束弱一些可取 0.01 |
+| `rtk.hold_std_cycles` | 1.0e-3 | 周 | fix-and-hold 伪观测标准差 | 想让约束弱一些可取 0.01–0.03 |
+| `rtk.hold_min_fix_epochs` | 10 | 历元 | 连续固定达到该数才开始 hold | 误固定多时调大 |
+| `rtk.fix_validate_sigma` | 4.0 | σ | 固定解载波残差检验门限 | 拒绝过多时调大到 5 |
+| `rtk.reset_pos_diff_m` | 30.0 | m | 浮点与伪距差分（或 SPP）相差超过的门限 | 城市峡谷 SPP 粗差大时调大 |
+| `rtk.reset_diverge_epochs` | 5 | 历元 | 连续超过 `reset_pos_diff_m` 达到该数才重置 | — |
+| `rtk.psr_outlier_sigma` | 4.0 | σ | 双差伪距定位的粗差剔除门限（最多剔 1/3，至少留 5 个） | — |
+| `rtk.reset_min_phase_dd` | 5 | 个 | 载波双差不足的判定门限 | — |
+| `rtk.reset_low_phase_s` | 10.0 | s | 载波双差不足持续超过该时长时重置 | — |
 | `correction.format` | auto | — | auto / rinex / rtcm3 | 文件名不规范时显式指定 |
 | `correction.paths` | HKWS 013/014 | 路径 | 基站 RINEX 或 RTCM 文件列表，支持 `~/`；第一个文件提供测站与天线信息 | 数据跨天时两天都要加 |
 | `correction.base_ecef` | HKWS APPROX XYZ | m | 基站标石 ECEF，覆盖文件中的坐标，再换算到 ARP；删掉此行则用文件中的坐标 | **需换成 IGS SINEX 精确坐标** |
@@ -345,7 +366,7 @@ timestamp,x,y,z,lat,lon,alt,pos_type,num_dd_psr,num_dd_cp,base_age_s,ratio,num_f
 | 基站 30 s 采样，取最近历元，不插值 | 龄期最多 15 s，双差大气残差增大 | 前后历元插值，或换 1 s 基站数据 |
 | 基线 12.9 km，未处理电离层 | 双差电离层残差厘米级，固定率受限 | 调大 `baseline_std_ppm`；估计双差电离层 |
 | GF 阈值固定，不随间隔和高度角调整 | 低纬电离层活跃时可能误判周跳，频繁重置模糊度 | 阈值随间隔和高度角缩放；加 MW 组合交叉检验 |
-| fix-and-hold 会保持误固定 | 误固定在周跳、长时间未观测或重置前不会恢复 | 要求连续多个历元固定后再 hold；固定后做残差检验 |
+| fix-and-hold 仍可能保持误固定 | 连续多历元误固定且残差都在门限内时仍会被锁住 | 用独立的未 hold 滤波器计算 ratio；加入 MW 组合辅助验证 |
 | GLONASS 不参与载波 | 可用卫星少一个星座 | 估计频间偏差，或采用 GLONASS 单差模糊度的方案 |
 | 两站信号码不一致（如 L2C 对 L2W）时未改正 1/4 周 | 该星模糊度无法固定到整数 | 比对 `code` 字段并改正相位偏差 |
 | 流动站导航文件只支持 RINEX 3.04 | offline 模式无法直接用 3.02 等版本的导航文件（如 HKWS） | 放宽 `rinex2ephems` / `rinex2iono_params` 的版本检查 |

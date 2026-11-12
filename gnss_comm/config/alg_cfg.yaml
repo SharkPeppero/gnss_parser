@@ -20,7 +20,7 @@ gnss_solver_node:
       format: auto
       # 数据包跨 UTC 午夜，两天都要加载；.crx 需先 crx2rnx 解压
       paths:
-        - /home/yjh/happy_room/vins_ws/bags/hkust_dataset/base_station/HKWS00HKG_R_20210140000_01D_30S_MO.crx
+        - /home/yjh/happy_room/vins_ws/bags/hkust_dataset/base_station/HKWS00HKG_R_20210130000_01D_30S_MO.rnx
         - /home/yjh/happy_room/vins_ws/bags/hkust_dataset/base_station/HKWS00HKG_R_20210140000_01D_30S_MO.rnx
       # 基站标石（marker）ECEF [m]，覆盖文件中的坐标；再按 ANTENNA: DELTA H/E/N（RTCM 为 1006 天线高）换算到 ARP。
       # 当前为 RINEX 头 APPROX POSITION（米级），应替换为 IGS SINEX 精确坐标；删掉此行则用文件中的坐标
@@ -57,8 +57,17 @@ gnss_solver_node:
       min_ratio: 3.0                  # ratio 检验阈值，>= 1
       min_fix_dd: 5                   # 参与固定的最少双差模糊度个数
       par_enabled: true               # 全集固定失败时按高度角从低到高逐个剔除再试（部分模糊度固定）
-      fix_and_hold: false              # 固定成功后把整数双差作为强约束回写滤波器
-      hold_std_cycles: 3e-2           # fix-and-hold 伪观测标准差 [周]
+      par_min_fix_fraction: 0.9       # 部分固定至少保留候选双差的比例，取值 [0, 1]；剔得过多时误固定率很高
+      fix_and_hold: true              # 固定成功后把整数双差作为强约束回写滤波器
+      hold_std_cycles: 1e-3           # fix-and-hold 伪观测标准差 [周]；RTKLIB 约 0.03，越小误固定越难恢复
+      hold_min_fix_epochs: 10         # 连续固定达到该历元数才开始 hold；hold 后 ratio 会虚高，不能再作为检验
+      fix_validate_sigma: 4.0         # 固定解各双差载波残差超过 k·σ 则拒绝该组固定（不依赖 ratio）
+      # 滤波器保护
+      reset_pos_diff_m: 30.0          # 浮点位置与伪距差分解（不可用时为 SPP）相差超过该值…… [m]
+      reset_diverge_epochs: 5         # ……且连续达到该历元数时重置滤波器；伪距差分解单历元可能被多路径拉偏
+      psr_outlier_sigma: 4.0          # 双差伪距定位迭代剔除标准化残差超过 k·σ 的观测（最多剔 1/3，至少留 5 个）
+      reset_min_phase_dd: 5           # 参与更新的载波双差少于该值……
+      reset_low_phase_s: 10.0         # ……且持续超过该时长时重置滤波器 [s]
 
     # SPP / RTK 结果 CSV 输出目录，支持 ~/ 开头；置为 "" 关闭写出
     # 每次启动写到 <output_path>/<本地时间 YYYY-MM-DD_HH_MM_SS>/spp_enu_*.csv、rtk_enu_*.csv

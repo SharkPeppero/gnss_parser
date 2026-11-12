@@ -3,7 +3,8 @@ Panels:
     Help Height: 70
     Name: Displays
     Property Tree Widget:
-      Expanded: ~
+      Expanded:
+        - /RTK1
       Splitter Ratio: 0.4720812141895294
     Tree Height: 785
   - Class: rviz_common/Selection
@@ -68,7 +69,7 @@ Visualization Manager:
       Color: 255; 255; 255
       Enabled: true
       History Length: 100000
-      Name: PointStamped
+      Name: Spp
       Radius: 0.5
       Topic:
         Depth: 5
@@ -84,7 +85,7 @@ Visualization Manager:
       Enabled: true
       History Length: 100000
       Name: RTK
-      Radius: 0.2
+      Radius: 0.5
       Topic:
         Depth: 5
         Durability Policy: Volatile
