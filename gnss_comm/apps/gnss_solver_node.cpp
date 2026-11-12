@@ -8,6 +8,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <ctime>
 #include <filesystem>
 #include <limits>
 #include <map>
@@ -161,9 +162,16 @@ public:
       rtk_enu_pub_ = create_publisher<geometry_msgs::msg::PointStamped>(declare_parameter<std::string>("publish.rtk.enu", "rtk/enu"), 10);
     }
 
-    // output_path 为空则不写 CSV；每次启动按时间戳新建文件，CORE 保留策略避免长数据的早期分片被轮转删除。
-    const auto output_path = expand_home(declare_parameter<std::string>("output_path", ""));
+    // output_path 为空则不写 CSV；每次启动在其下新建本地时间命名的子目录（如 2026-11-12_15_23_15），
+    // CORE 保留策略避免长数据的早期分片被轮转删除。
+    auto output_path = expand_home(declare_parameter<std::string>("output_path", ""));
     if (!output_path.empty()) {
+      const std::time_t now = std::time(nullptr);
+      std::tm local_time{};
+      localtime_r(&now, &local_time);
+      char run_dir[32];
+      std::strftime(run_dir, sizeof(run_dir), "%Y-%m-%d_%H_%M_%S", &local_time);
+      output_path = (std::filesystem::path(output_path) / run_dir).string();
       std::filesystem::create_directories(output_path);
       auto &csv = common::CsvIOHelper::GetInstance();
       bool ok = true;

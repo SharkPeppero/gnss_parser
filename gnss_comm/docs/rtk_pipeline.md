@@ -249,7 +249,7 @@ $$
 
 时间戳由 GPST 转成 UTC Unix 时间。
 
-**CSV**（`output_path`，文件名前缀 `rtk_enu`；开启 SPP 时同目录还有 `spp_enu`）的列：
+**CSV**（`output_path/<启动时刻 YYYY-MM-DD_HH_MM_SS>/`，文件名前缀 `rtk_enu`；开启 SPP 时同目录还有 `spp_enu`）的列：
 
 ```csv
 timestamp,x,y,z,lat,lon,alt,pos_type,num_dd_psr,num_dd_cp,base_age_s,ratio,num_fix_dd,std_e_m,std_n_m,std_u_m
@@ -293,7 +293,7 @@ timestamp,x,y,z,lat,lon,alt,pos_type,num_dd_psr,num_dd_cp,base_age_s,ratio,num_f
 | `correction.paths` | HKWS 013/014 | 路径 | 基站 RINEX 或 RTCM 文件列表，支持 `~/`；第一个文件提供测站与天线信息 | 数据跨天时两天都要加 |
 | `correction.base_ecef` | HKWS APPROX XYZ | m | 基站标石 ECEF，覆盖文件中的坐标，再换算到 ARP；删掉此行则用文件中的坐标 | **需换成 IGS SINEX 精确坐标** |
 | `correction.antex_path` | "" | 路径 | IGS ANTEX 文件，用于基站天线 PCO；空字符串不改正 | 2021 年数据用 igs14.atx |
-| `output_path` | \~/gnss\_comm\_output | 路径 | SPP / RTK 的 CSV 输出目录，空字符串关闭 | — |
+| `output_path` | \~/gnss\_comm\_output | 路径 | SPP / RTK 的 CSV 输出根目录，每次启动在其下新建一个本地时间命名的子目录；空字符串关闭 | — |
 
 迭代参数 `max_iterations` = 10 和 `convergence_threshold` = 1e-4 m 仅用于伪距差分，没有开放为 ROS 参数。
 

@@ -9,9 +9,9 @@ gnss_solver_node:
     # 注意：rinex2ephems / rinex2iono_params 目前只接受 RINEX 3.04 导航文件
     offline:
       rover_obs_paths:
-        - /home/yjh/happy_room/vins_ws/bags/rover_rinex/complex_environment_ros2.obs
+        - /home/yjh/happy_room/vins_ws/bags/hkust_dataset/rover_rinex/complex_environment_ros2.obs
       rover_nav_paths:
-        - /home/yjh/happy_room/vins_ws/bags/rover_rinex/complex_environment_ros2.nav
+        - /home/yjh/happy_room/vins_ws/bags/hkust_dataset/rover_rinex/complex_environment_ros2.nav
       playback_rate: 0.0            # 0 尽快处理；> 0 按观测时间间隔 / rate 节流，便于 RViz 观察
 
     # 离线差分数据（rtk.enable: true 时使用），RINEX 3.xx 观测文件或 RTCM 3.x 二进制文件（MSM4~7）
@@ -20,8 +20,8 @@ gnss_solver_node:
       format: auto
       # 数据包跨 UTC 午夜，两天都要加载；.crx 需先 crx2rnx 解压
       paths:
-        - /home/yjh/happy_room/vins_ws/bags/base_station/HKWS00HKG_R_20210130000_01D_30S_MO.rnx
-        - /home/yjh/happy_room/vins_ws/bags/base_station/HKWS00HKG_R_20210140000_01D_30S_MO.rnx
+        - /home/yjh/happy_room/vins_ws/bags/hkust_dataset/base_station/HKWS00HKG_R_20210140000_01D_30S_MO.crx
+        - /home/yjh/happy_room/vins_ws/bags/hkust_dataset/base_station/HKWS00HKG_R_20210140000_01D_30S_MO.rnx
       # 基站标石（marker）ECEF [m]，覆盖文件中的坐标；再按 ANTENNA: DELTA H/E/N（RTCM 为 1006 天线高）换算到 ARP。
       # 当前为 RINEX 头 APPROX POSITION（米级），应替换为 IGS SINEX 精确坐标；删掉此行则用文件中的坐标
       base_ecef: [ -2430579.0108, 5374285.6738, 2418956.3331 ]
@@ -57,8 +57,9 @@ gnss_solver_node:
       min_ratio: 3.0                  # ratio 检验阈值，>= 1
       min_fix_dd: 5                   # 参与固定的最少双差模糊度个数
       par_enabled: true               # 全集固定失败时按高度角从低到高逐个剔除再试（部分模糊度固定）
-      fix_and_hold: true              # 固定成功后把整数双差作为强约束回写滤波器
-      hold_std_cycles: 1.0e-3         # fix-and-hold 伪观测标准差 [周]
+      fix_and_hold: false              # 固定成功后把整数双差作为强约束回写滤波器
+      hold_std_cycles: 3e-2           # fix-and-hold 伪观测标准差 [周]
 
-    # SPP / RTK 结果 CSV 输出目录（spp_enu_*.csv、rtk_enu_*.csv），支持 ~/ 开头；置为 "" 关闭写出
+    # SPP / RTK 结果 CSV 输出目录，支持 ~/ 开头；置为 "" 关闭写出
+    # 每次启动写到 <output_path>/<本地时间 YYYY-MM-DD_HH_MM_SS>/spp_enu_*.csv、rtk_enu_*.csv
     output_path: /home/yjh/happy_room/vins_ws/gnss_comm_output
