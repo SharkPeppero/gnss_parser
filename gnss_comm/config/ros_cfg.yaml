@@ -1,21 +1,25 @@
-# spp_solver_node 订阅 / 发布的 ROS 话题
-spp_solver_node:
+# gnss_solver_node 订阅 / 发布的 ROS 话题
+gnss_solver_node:
   ros__parameters:
+    # 仅 online 模式订阅（驱动实时数据或 ros2 bag 回放）；offline 模式从 alg_cfg 的 offline.* 文件读取
     subscribe:
-      range_meas: /ublox_driver/range_meas          # 原始观测，每帧触发一次 SPP
-      ephem: /ublox_driver/ephem                    # GPS/GAL/BDS/QZS 星历
+      range_meas: /ublox_driver/range_meas          # 流动站原始观测，每帧触发一次解算
+      ephem: /ublox_driver/ephem                    # GPS/GAL/BDS/QZS 星历，基站共用
       glo_ephem: /ublox_driver/glo_ephem            # GLONASS 星历
       iono_params: /ublox_driver/iono_params        # 广播电离层参数（8 个）
       receiver_lla: /ublox_driver/receiver_lla      # 首帧作为 ENU 原点
-      receiver_pvt: /ublox_driver/receiver_pvt      # 接收机 PVT，仅缓存
-      time_pulse_info: /ublox_driver/time_pulse_info  # PPS 信息，仅缓存
 
     publish:
-      fix: spp/fix                                  # sensor_msgs/NavSatFix
-      ecef: spp/ecef                                # geometry_msgs/PointStamped
-      enu: spp/enu                                  # geometry_msgs/PointStamped
-      receiver_clock_bias: spp/receiver_clock_bias_m  # gnss_msg/StampedFloat64Array
-      reference_lla: spp/reference_lla              # ENU 原点，transient_local
-      skyplot: spp/skyplot                          # sensor_msgs/Image，虚拟鱼眼天空图（有订阅者才绘制）
+      reference_lla: gnss/reference_lla             # ENU 原点，transient_local；SPP 与 RTK 共用
+      spp:
+        fix: spp/fix                                # sensor_msgs/NavSatFix
+        ecef: spp/ecef                              # geometry_msgs/PointStamped
+        enu: spp/enu                                # geometry_msgs/PointStamped
+        receiver_clock_bias: spp/receiver_clock_bias_m  # gnss_msg/StampedFloat64Array
+        skyplot: spp/skyplot                        # sensor_msgs/Image，虚拟鱼眼天空图（有订阅者才绘制）
+      rtk:
+        fix: rtk/fix                                # sensor_msgs/NavSatFix，差分解为 STATUS_GBAS_FIX
+        ecef: rtk/ecef                              # geometry_msgs/PointStamped
+        enu: rtk/enu                                # geometry_msgs/PointStamped
 
     skyplot_size: 600                               # 天空图边长 [px]，>= 200

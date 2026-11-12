@@ -252,7 +252,7 @@ Eigen::Vector3d eph2vel(const gtime_t &curr_time, const EphemPtr ephem_ptr, doub
     double zg = yk_prime * sin_ik;
     double xg_dot = term1 * cos_OMG_k - term2 * sin_OMG_k;
     double yg_dot = term1 * sin_OMG_k + term2 * cos_OMG_k;
-    double zg_dot = yk_prime_dot * sin_ik + yk_prime_dot * ik_dot * cos_ik;
+    double zg_dot = yk_prime_dot * sin_ik + yk_prime * ik_dot * cos_ik;
     double sin_o = sin(earth_omg * tk), cos_o = cos(earth_omg * tk);
     double sin_o_dot = earth_omg * cos_o, cos_o_dot = -earth_omg * sin_o;
 
@@ -267,7 +267,7 @@ Eigen::Vector3d eph2vel(const gtime_t &curr_time, const EphemPtr ephem_ptr, doub
     double term2 = xk_prime * OMGk_dot + yk_prime_dot * cos_ik - yk_prime * ik_dot * sin_ik;
     sv_vel.x() = term1 * cos_OMG_k - term2 * sin_OMG_k;
     sv_vel.y() = term1 * sin_OMG_k + term2 * cos_OMG_k;
-    sv_vel.z() = yk_prime_dot * sin_ik + yk_prime_dot * ik_dot * cos_ik;
+    sv_vel.z() = yk_prime_dot * sin_ik + yk_prime * ik_dot * cos_ik;
   }
 
   double dt = time_diff(curr_time, ephem_ptr->toc);

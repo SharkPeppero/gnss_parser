@@ -1,5 +1,10 @@
+"""GNSS 解算（SPP / RTK）启动文件。
 
-"""交互式离线 SPP：首次输入 Bag 后启动算法和 RViz，后续只切换 Bag。"""
+mode:=online（默认）：交互式输入 Bag 路径，启动 gnss_solver_node 和 RViz 后回放 Bag，后续只切换 Bag；
+    RTK 滤波器跨历元保留状态，切换的 Bag 与上一个时间不连续时会因间隔超过 max_gap_s 自动重置。
+mode:=offline：gnss_solver_node 直接读取 alg_cfg 中 offline.* 的流动站 RINEX 文件，处理完后节点保持运行，Ctrl-C 退出。
+两种模式的差分数据都从 alg_cfg 的 correction.* 离线文件加载；SPP / RTK 开关见 alg_cfg 的 spp.enable / rtk.enable。
+"""
 
 import os
 import subprocess
@@ -25,7 +30,7 @@ def read_bag_path(tty):
     """读取并验证 Bag 路径。"""
     while True:
         print(
-            "\n[spp_offline] 输入 Bag 路径（回车或 q 退出）：",
+            "\n[gnss_solver] 输入 Bag 路径（回车或 q 退出）：",
             flush=True,
         )
         line = tty.readline()
@@ -38,7 +43,7 @@ def read_bag_path(tty):
             return None
 
         if not os.path.exists(path):
-            print(f"[spp_offline] 路径不存在：{path}", flush=True)
+            print(f"[gnss_solver] 路径不存在：{path}", flush=True)
             continue
 
         return os.path.abspath(path)
@@ -51,7 +56,7 @@ def prompt_loop(rate, first_bag):
 
         while path is not None:
             print(
-                f"[spp_offline] 开始回放：{path} (rate={rate})",
+                f"[gnss_solver] 开始回放：{path} (rate={rate})",
                 flush=True,
             )
 
@@ -59,44 +64,34 @@ def prompt_loop(rate, first_bag):
                 result = subprocess.run([
                     "ros2", "bag", "play", path,
                     "--rate", rate,
-                    "--delay", "2.0",
+                    # 等节点完成订阅再回放，避免丢掉开头的星历
+                    "--delay", "3.0",
                 ])
                 if result.returncode != 0:
                     print(
-                        f"[spp_offline] 回放退出码：{result.returncode}",
+                        f"[gnss_solver] 回放退出码：{result.returncode}",
                         flush=True,
                     )
             except KeyboardInterrupt:
                 return
 
-            print("[spp_offline] 回放结束。", flush=True)
+            print("[gnss_solver] 回放结束。", flush=True)
             path = read_bag_path(tty)
 
 
-def start_offline(context, *args, **kwargs):
-    """首次读取有效 Bag 路径后，创建算法、RViz 和回放进程。"""
-    try:
-        with open("/dev/tty", "r") as tty:
-            first_bag = read_bag_path(tty)
-    except OSError as exc:
-        print(f"[spp_offline] 无法读取终端：{exc}", flush=True)
-        return [EmitEvent(event=Shutdown())]
+def solver_and_rviz(mode):
+    parameters = [
+        LaunchConfiguration("ros_cfg"),
+        LaunchConfiguration("alg_cfg"),
+        {"mode": mode},
+    ]
 
-    if first_bag is None:
-        return [EmitEvent(event=Shutdown())]
-
-    rate = LaunchConfiguration("rate").perform(context)
-
-    spp_node = Node(
+    solver_node = Node(
         package="gnss_comm",
-        executable="spp_solver_node",
-        name="spp_solver_node",
+        executable="gnss_solver_node",
+        name="gnss_solver_node",
         output="screen",
-        parameters=[
-            LaunchConfiguration("ros_cfg"),
-            LaunchConfiguration("alg_cfg"),
-            {"output_path": LaunchConfiguration("output_path")},
-        ],
+        parameters=parameters,
     )
 
     rviz_node = Node(
@@ -106,7 +101,29 @@ def start_offline(context, *args, **kwargs):
         arguments=["-d", LaunchConfiguration("rviz_cfg")],
         condition=IfCondition(LaunchConfiguration("rviz")),
     )
+    return [solver_node, rviz_node]
 
+
+def start(context, *args, **kwargs):
+    mode = LaunchConfiguration("mode").perform(context)
+    if mode == "offline":
+        return solver_and_rviz(mode)
+    if mode != "online":
+        print(f"[gnss_solver] mode 只能是 online 或 offline：{mode}", flush=True)
+        return [EmitEvent(event=Shutdown())]
+
+    # online：首次读取有效 Bag 路径后，创建算法、RViz 和回放进程
+    try:
+        with open("/dev/tty", "r") as tty:
+            first_bag = read_bag_path(tty)
+    except OSError as exc:
+        print(f"[gnss_solver] 无法读取终端：{exc}", flush=True)
+        return [EmitEvent(event=Shutdown())]
+
+    if first_bag is None:
+        return [EmitEvent(event=Shutdown())]
+
+    rate = LaunchConfiguration("rate").perform(context)
     bag_prompt = ExecuteProcess(
         cmd=[
             sys.executable,
@@ -119,9 +136,7 @@ def start_offline(context, *args, **kwargs):
         output="screen",
     )
 
-    return [
-        spp_node,
-        rviz_node,
+    return solver_and_rviz(mode) + [
         bag_prompt,
         RegisterEventHandler(
             OnProcessExit(
@@ -135,9 +150,14 @@ def start_offline(context, *args, **kwargs):
 def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument(
+            "mode",
+            default_value="online",
+            description="online：回放 Bag；offline：读取 alg_cfg 中 offline.* 的 RINEX 文件。",
+        ),
+        DeclareLaunchArgument(
             "rate",
             default_value="1.0",
-            description="Bag 回放倍速。",
+            description="online 模式的 Bag 回放倍速；offline 节流见 alg_cfg 的 offline.playback_rate。",
         ),
         DeclareLaunchArgument(
             "ros_cfg",
@@ -156,14 +176,6 @@ def generate_launch_description():
             ]),
         ),
         DeclareLaunchArgument(
-            "output_path",
-            default_value=os.path.join(
-                os.path.expanduser("~"),
-                "gnss_comm_output",
-                "spp",
-            ),
-        ),
-        DeclareLaunchArgument(
             "rviz",
             default_value="true",
         ),
@@ -175,7 +187,7 @@ def generate_launch_description():
                 "gnss.rviz",
             ]),
         ),
-        OpaqueFunction(function=start_offline),
+        OpaqueFunction(function=start),
     ])
 
 

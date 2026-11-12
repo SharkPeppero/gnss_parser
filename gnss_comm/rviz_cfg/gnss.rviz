@@ -78,6 +78,21 @@ Visualization Manager:
         Reliability Policy: Reliable
         Value: /spp/enu
       Value: true
+    - Alpha: 1
+      Class: rviz_default_plugins/PointStamped
+      Color: 0; 255; 0
+      Enabled: true
+      History Length: 100000
+      Name: RTK
+      Radius: 0.2
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        Filter size: 10
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /rtk/enu
+      Value: true
     - Class: rviz_default_plugins/Image
       Enabled: true
       Max Value: 1

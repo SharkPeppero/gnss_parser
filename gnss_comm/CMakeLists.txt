@@ -27,6 +27,7 @@ target_include_directories(${PROJECT_NAME}_core PUBLIC
 ament_target_dependencies(${PROJECT_NAME}_core
   rclcpp
   std_msgs
+  sensor_msgs
   gnss_msg
 )
 
@@ -34,11 +35,11 @@ target_link_libraries(${PROJECT_NAME}_core
   glog::glog
 )
 
-add_executable(spp_solver_node apps/spp_solver_node.cpp)
-target_link_libraries(spp_solver_node ${PROJECT_NAME}_core ${OpenCV_LIBS})
-target_include_directories(spp_solver_node PRIVATE ${OpenCV_INCLUDE_DIRS})
-ament_target_dependencies(spp_solver_node rclcpp gnss_msg sensor_msgs geometry_msgs fusion_location_utils)
-install(TARGETS spp_solver_node DESTINATION lib/${PROJECT_NAME})
+add_executable(gnss_solver_node apps/gnss_solver_node.cpp)
+target_link_libraries(gnss_solver_node ${PROJECT_NAME}_core ${OpenCV_LIBS})
+target_include_directories(gnss_solver_node PRIVATE ${OpenCV_INCLUDE_DIRS})
+ament_target_dependencies(gnss_solver_node rclcpp gnss_msg sensor_msgs geometry_msgs fusion_location_utils)
+install(TARGETS gnss_solver_node DESTINATION lib/${PROJECT_NAME})
 install(DIRECTORY config launch rviz_cfg DESTINATION share/${PROJECT_NAME})
 
 install(
@@ -57,6 +58,7 @@ ament_export_targets(export_${PROJECT_NAME}_core HAS_LIBRARY_TARGET)
 ament_export_dependencies(glog)
 ament_export_dependencies(rclcpp)
 ament_export_dependencies(std_msgs)
+ament_export_dependencies(sensor_msgs)
 ament_export_dependencies(gnss_msg)
 ament_export_include_directories(include)
 ament_export_libraries(${PROJECT_NAME}_core)

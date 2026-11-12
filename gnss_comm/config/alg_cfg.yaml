@@ -1,6 +1,62 @@
-# spp_solver_node 算法参数
-spp_solver_node:
+# gnss_solver_node 算法参数
+gnss_solver_node:
   ros__parameters:
-    elevation_cutoff_degree: 15.0   # 截止高度角 [deg]，取值 [0, 90)
-    max_iterations: 30              # 伪距最小二乘最大迭代次数，> 0
-    convergence_threshold: 1.0e-4   # 状态增量范数收敛阈值，取值 (0, 1)
+    # online：订阅 ros_cfg 中的话题（驱动或 ros2 bag 回放）；offline：一次性读取下方 offline.* 的 RINEX 文件
+    # 两种模式的差分数据都来自 correction.* 的离线文件。launch 的 mode 参数会覆盖这里。
+    mode: online
+
+    # 离线流动站数据（mode: offline 时使用）
+    # 注意：rinex2ephems / rinex2iono_params 目前只接受 RINEX 3.04 导航文件
+    offline:
+      rover_obs_paths:
+        - /path/to/rover.obs
+      rover_nav_paths:
+        - /path/to/rover.nav
+      playback_rate: 0.0            # 0 尽快处理；> 0 按观测时间间隔 / rate 节流，便于 RViz 观察
+
+    # 离线差分数据（rtk.enable: true 时使用），RINEX 3.xx 观测文件或 RTCM 3.x 二进制文件（MSM4~7）
+    correction:
+      # auto：文件名含 .rtcm 或以 .rtc 结尾按 RTCM，否则按 RINEX；也可显式写 rinex / rtcm3
+      format: auto
+      # 数据包跨 UTC 午夜，两天都要加载；.crx 需先 crx2rnx 解压
+      paths:
+        - /home/yjh/happy_room/vins_ws/bags/base_station/HKWS00HKG_R_20210130000_01D_30S_MO.rnx
+        - /home/yjh/happy_room/vins_ws/bags/base_station/HKWS00HKG_R_20210140000_01D_30S_MO.rnx
+      # 基站标石（marker）ECEF [m]，覆盖文件中的坐标；再按 ANTENNA: DELTA H/E/N（RTCM 为 1006 天线高）换算到 ARP。
+      # 当前为 RINEX 头 APPROX POSITION（米级），应替换为 IGS SINEX 精确坐标；删掉此行则用文件中的坐标
+      base_ecef: [-2430579.0108, 5374285.6738, 2418956.3331]
+      # IGS ANTEX 文件（2021 年数据用 igs14.atx），用于基站天线 PCO；置为 "" 则不改正
+      antex_path: ""
+
+    spp:
+      enable: true
+      elevation_cutoff_degree: 15.0   # 截止高度角 [deg]，取值 [0, 90)
+      max_iterations: 30              # 伪距最小二乘最大迭代次数，> 0
+      convergence_threshold: 1.0e-4   # 状态增量范数收敛阈值，取值 (0, 1)
+
+    rtk:
+      enable: true
+      elevation_cutoff_degree: 15.0   # 截止高度角 [deg]，取值 [0, 90)
+      num_bands: 2                    # 双差频段数：1 只用 L1/E1/B1I，2 再加 L2/E5b/B2I
+      use_glonass: false              # GLONASS FDMA 频间偏差未处理，暂不参与双差
+      code_std_m: 0.3                 # 天顶方向非差伪距标准差 [m]
+      phase_std_m: 0.003              # 天顶方向非差载波标准差 [m]
+      max_base_age_s: 30.0            # 最大差分龄期 [s]；HKWS 为 30 s 采样，最近历元龄期 <= 15 s
+      baseline_std_ppm: 1.0           # 与基线成正比的非差误差 [ppm]，近似未模型化的大气/轨道残差
+      # 浮点 EKF
+      accel_std_mps2: 3.0             # 匀速模型白噪声加速度 [m/s^2]，车载取 1~5
+      amb_init_std_cycles: 10.0       # 新模糊度初值标准差 [周]
+      amb_process_std_cycles: 1.0e-4  # 模糊度随机游走 [周/sqrt(s)]
+      innov_gate_sigma: 5.0           # 新息门限 [sigma]；载波超限按周跳重置该星模糊度
+      max_gap_s: 10.0                 # 历元间隔超过时重置滤波器 [s]
+      max_amb_outage_s: 10.0          # 模糊度连续未观测超过时删除 [s]
+      gf_slip_threshold_m: 0.05       # GF 组合相邻历元跳变超过时判为周跳 [m]；低纬电离层活跃时可放宽到 0.1
+      # LAMBDA 模糊度固定
+      min_ratio: 3.0                  # ratio 检验阈值，>= 1
+      min_fix_dd: 5                   # 参与固定的最少双差模糊度个数
+      par_enabled: true               # 全集固定失败时按高度角从低到高逐个剔除再试（部分模糊度固定）
+      fix_and_hold: true              # 固定成功后把整数双差作为强约束回写滤波器
+      hold_std_cycles: 1.0e-3         # fix-and-hold 伪观测标准差 [周]
+
+    # SPP / RTK 结果 CSV 输出目录（spp_enu_*.csv、rtk_enu_*.csv），支持 ~/ 开头；置为 "" 关闭写出
+    output_path: ~/gnss_comm_output

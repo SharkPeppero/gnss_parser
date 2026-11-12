@@ -22,131 +22,13 @@
 #include "gnss_comm/gnss_utility.hpp"
 #include <glog/logging.h>
 
-
 namespace gnss_comm {
 
 SppSolverPipeline::SppSolverPipeline(const SppSolverPipelineOptions &options) : options_(options) {}
 
-void SppSolverPipeline::filter_L1(const std::vector<ObsPtr> &obs,          //
-               const std::vector<EphemBasePtr> &ephems, //
-               std::vector<ObsPtr> &L1_obs,             //
-               std::vector<EphemBasePtr> &L1_ephems) const {
-  L1_obs.clear();
-  L1_ephems.clear();
-  for (size_t i = 0; i < obs.size(); ++i) {
-    const ObsPtr &this_obs = obs[i];
-    // check system
-    const uint32_t sys = satsys(this_obs->sat, NULL);
-    if (sys != SYS_GPS && sys != SYS_GLO && sys != SYS_BDS && sys != SYS_GAL && sys != SYS_QZS)
-      continue;
-    // check signal frequency
-    const double obs_freq = L1_freq(this_obs, NULL);
-    if (obs_freq < 0)
-      continue;
-
-    L1_obs.push_back(this_obs);
-    L1_ephems.push_back(ephems[i]);
-  }
-}
-
-std::vector<SatStatePtr> SppSolverPipeline::sat_states(const std::vector<ObsPtr> &obs, //
-                                    const std::vector<EphemBasePtr> &ephems) const {
-  std::vector<SatStatePtr> all_sv_states;
-  const uint32_t num_obs = obs.size();
-  for (size_t i = 0; i < num_obs; ++i) {
-    SatStatePtr sat_state(new SatState());
-    all_sv_states.push_back(sat_state);
-
-    ObsPtr this_obs = obs[i];
-    const uint32_t sat = this_obs->sat;
-    const uint32_t sys = satsys(sat, NULL);
-    int l1_idx = -1;
-    L1_freq(this_obs, &l1_idx);
-    if (l1_idx < 0)
-      continue;
-    double tof = this_obs->psr[l1_idx] / LIGHT_SPEED;
-
-    gtime_t sv_tx = time_add(this_obs->time, -tof);
-    double satellite_clock_bias_s = 0, satellite_clock_drift_sps = 0;
-    Eigen::Vector3d sv_pos = Eigen::Vector3d::Zero();
-    Eigen::Vector3d sv_vel = Eigen::Vector3d::Zero();
-    if (sys == SYS_GLO) {
-      GloEphemPtr glo_ephem = std::dynamic_pointer_cast<GloEphem>(ephems[i]);
-      satellite_clock_bias_s = geph2svdt(sv_tx, glo_ephem);
-      sv_tx = time_add(sv_tx, -satellite_clock_bias_s);
-      sv_pos = geph2pos(sv_tx, glo_ephem, &satellite_clock_bias_s);
-      sv_vel = geph2vel(sv_tx, glo_ephem, &satellite_clock_drift_sps);
-    } else {
-      EphemPtr ephem = std::dynamic_pointer_cast<Ephem>(ephems[i]);
-      satellite_clock_bias_s = eph2svdt(sv_tx, ephem);
-      sv_tx = time_add(sv_tx, -satellite_clock_bias_s);
-      sv_pos = eph2pos(sv_tx, ephem, &satellite_clock_bias_s);
-      sv_vel = eph2vel(sv_tx, ephem, &satellite_clock_drift_sps);
-      sat_state->tgd = ephem->tgd[0];
-    }
-    sat_state->sat_id = sat;
-    sat_state->ttx = sv_tx;
-    sat_state->pos = sv_pos;
-    sat_state->vel = sv_vel;
-    sat_state->satellite_clock_bias_s = satellite_clock_bias_s;
-    sat_state->satellite_clock_drift_sps = satellite_clock_drift_sps;
-  }
-  return all_sv_states;
-}
-
-void SppSolverPipeline::psr_res(const Eigen::Matrix<double, 7, 1> &rcv_state,  //
-             const std::vector<ObsPtr> &obs,                //
-             const std::vector<SatStatePtr> &all_sv_states, //
-             const std::vector<double> &iono_params,        //
-             Eigen::VectorXd &res,                          //
-             Eigen::MatrixXd &J,                            //
-             std::vector<Eigen::Vector2d> &atmos_delay,     //
-             std::vector<Eigen::Vector2d> &all_sv_azel) const {
-  const uint32_t num_sv = all_sv_states.size();
-  // clear output
-  res = Eigen::VectorXd::Zero(num_sv);
-  J = Eigen::MatrixXd::Zero(num_sv, 7);
-  atmos_delay.resize(num_sv);
-  all_sv_azel.resize(num_sv);
-
-  for (uint32_t i = 0; i < num_sv; ++i) {
-    int l1_idx = -1;
-    L1_freq(obs[i], &l1_idx);
-    if (l1_idx < 0)
-      continue;
-
-    const SatStatePtr &sat_state = all_sv_states[i];
-    uint32_t this_sys = satsys(sat_state->sat_id, NULL);
-    Eigen::Vector3d sv_pos = sat_state->pos;
-
-    double ion_delay = 0, tro_delay = 0;
-    double azel[2] = {0, M_PI / 2.0};
-    if (rcv_state.topLeftCorner<3, 1>().norm() > 0) {
-      sat_azel(rcv_state.topLeftCorner<3, 1>(), sv_pos, azel);
-      Eigen::Vector3d rcv_lla = ecef2geo(rcv_state.head<3>());
-      // use satellite signal transmit time instead
-      tro_delay = calculate_trop_delay(sat_state->ttx, rcv_lla, azel);
-      ion_delay = calculate_ion_delay(sat_state->ttx, iono_params, rcv_lla, azel);
-    }
-
-    Eigen::Vector3d rv2sv = sv_pos - rcv_state.topLeftCorner<3, 1>();
-    Eigen::Vector3d unit_rv2sv = rv2sv.normalized();
-    double sagnac_term = EARTH_OMG_GPS * (sv_pos(0) * rcv_state(1, 0) - sv_pos(1) * rcv_state(0, 0)) / LIGHT_SPEED;
-    const double receiver_clock_bias_m = rcv_state(3 + sys2idx.at(this_sys));
-    double psr_estimated = rv2sv.norm() + sagnac_term + receiver_clock_bias_m - sat_state->satellite_clock_bias_s * LIGHT_SPEED + tro_delay + ion_delay + sat_state->tgd * LIGHT_SPEED;
-
-    J.block(i, 0, 1, 3) = -unit_rv2sv.transpose();
-    J(i, 3 + sys2idx.at(this_sys)) = 1.0;
-    res(i) = psr_estimated - obs[i]->psr[l1_idx];
-
-    atmos_delay[i] = Eigen::Vector2d(ion_delay, tro_delay);
-    all_sv_azel[i] = Eigen::Vector2d(azel[0], azel[1]);
-  }
-}
-
 Eigen::Matrix<double, 7, 1> SppSolverPipeline::psr_pos(const std::vector<ObsPtr> &obs,          //
-                                    const std::vector<EphemBasePtr> &ephems, //
-                                    const std::vector<double> &iono_params) const {
+                                                       const std::vector<EphemBasePtr> &ephems, //
+                                                       const std::vector<double> &iono_params) const {
   Eigen::Matrix<double, 7, 1> result;
   result.setZero();
 
@@ -158,6 +40,7 @@ Eigen::Matrix<double, 7, 1> SppSolverPipeline::psr_pos(const std::vector<ObsPtr>
     return result;
   }
 
+  // 获取
   std::vector<SatStatePtr> all_sat_states = sat_states(valid_obs, valid_ephems);
 
   // [ECEF位置(m), receiver_clock_bias_m(GPS/GLO/GAL/BDS)]
@@ -245,41 +128,14 @@ Eigen::Matrix<double, 7, 1> SppSolverPipeline::psr_pos(const std::vector<ObsPtr>
     return result;
   }
 
+  //
   result = receiver_position_clock_state;
   return result;
 }
 
-void SppSolverPipeline::dopp_res(const Eigen::Matrix<double, 4, 1> &rcv_state,  //
-              const Eigen::Vector3d &rcv_ecef,               //
-              const std::vector<ObsPtr> &obs,                //
-              const std::vector<SatStatePtr> &all_sv_states, //
-              Eigen::VectorXd &res,                          //
-              Eigen::MatrixXd &J) const {
-  const uint32_t num_sv = all_sv_states.size();
-  // clear output
-  res = Eigen::VectorXd::Zero(num_sv);
-  J = Eigen::MatrixXd::Zero(num_sv, 4);
-
-  for (uint32_t i = 0; i < num_sv; ++i) {
-    const SatStatePtr &sat_state = all_sv_states[i];
-    Eigen::Vector3d unit_rv2sv = (sat_state->pos - rcv_ecef).normalized();
-    double sagnac_term = EARTH_OMG_GPS / LIGHT_SPEED * (sat_state->vel(0) * rcv_ecef(1) + sat_state->pos(0) * rcv_state(1, 0) - sat_state->vel(1) * rcv_ecef(0) - sat_state->pos(1) * rcv_state(0, 0));
-    const double receiver_clock_drift_mps = rcv_state(3, 0);
-    double dopp_estimated = (sat_state->vel - rcv_state.topLeftCorner<3, 1>()).dot(unit_rv2sv) + receiver_clock_drift_mps + sagnac_term - sat_state->satellite_clock_drift_sps * LIGHT_SPEED;
-    int l1_idx = -1;
-    const double obs_freq = L1_freq(obs[i], &l1_idx);
-    if (obs_freq < 0)
-      continue;
-    const double wavelength = LIGHT_SPEED / obs_freq;
-    res(i) = dopp_estimated + obs[i]->dopp[l1_idx] * wavelength;
-    J.block(i, 0, 1, 3) = -1.0 * unit_rv2sv.transpose();
-    J(i, 3) = 1.0;
-  }
-}
-
 Eigen::Matrix<double, 4, 1> SppSolverPipeline::dopp_vel(const std::vector<ObsPtr> &obs,          //
-                                     const std::vector<EphemBasePtr> &ephems, //
-                                     Eigen::Vector3d &ref_ecef) const {
+                                                        const std::vector<EphemBasePtr> &ephems, //
+                                                        Eigen::Vector3d &ref_ecef) const {
   // LOG(INFO) << "try to solve Doppler velocity.";
   Eigen::Matrix<double, 4, 1> result;
   result.setZero();
@@ -374,4 +230,150 @@ Eigen::Matrix<double, 4, 1> SppSolverPipeline::dopp_vel(const std::vector<ObsPtr
   result = receiver_velocity_clock_state;
   return result;
 }
+
+void SppSolverPipeline::filter_L1(const std::vector<ObsPtr> &obs,          //
+                                  const std::vector<EphemBasePtr> &ephems, //
+                                  std::vector<ObsPtr> &L1_obs,             //
+                                  std::vector<EphemBasePtr> &L1_ephems) const {
+  L1_obs.clear();
+  L1_ephems.clear();
+  for (size_t i = 0; i < obs.size(); ++i) {
+    const ObsPtr &this_obs = obs[i];
+    // check system
+    const uint32_t sys = satsys(this_obs->sat, NULL);
+    if (sys != SYS_GPS && sys != SYS_GLO && sys != SYS_BDS && sys != SYS_GAL && sys != SYS_QZS)
+      continue;
+    // check signal frequency
+    const double obs_freq = L1_freq(this_obs, NULL);
+    if (obs_freq < 0)
+      continue;
+
+    L1_obs.push_back(this_obs);
+    L1_ephems.push_back(ephems[i]);
+  }
+}
+
+std::vector<SatStatePtr> SppSolverPipeline::sat_states(const std::vector<ObsPtr> &obs, //
+                                                       const std::vector<EphemBasePtr> &ephems) const {
+  std::vector<SatStatePtr> all_sv_states;
+  const uint32_t num_obs = obs.size();
+  for (size_t i = 0; i < num_obs; ++i) {
+    SatStatePtr sat_state(new SatState());
+    all_sv_states.push_back(sat_state);
+
+    ObsPtr this_obs = obs[i];
+    const uint32_t sat = this_obs->sat;
+    const uint32_t sys = satsys(sat, NULL);
+    int l1_idx = -1;
+    L1_freq(this_obs, &l1_idx);
+    if (l1_idx < 0)
+      continue;
+    double tof = this_obs->psr[l1_idx] / LIGHT_SPEED;
+
+    gtime_t sv_tx = time_add(this_obs->time, -tof);
+    double satellite_clock_bias_s = 0, satellite_clock_drift_sps = 0;
+    Eigen::Vector3d sv_pos = Eigen::Vector3d::Zero();
+    Eigen::Vector3d sv_vel = Eigen::Vector3d::Zero();
+    if (sys == SYS_GLO) {
+      GloEphemPtr glo_ephem = std::dynamic_pointer_cast<GloEphem>(ephems[i]);
+      satellite_clock_bias_s = geph2svdt(sv_tx, glo_ephem);
+      sv_tx = time_add(sv_tx, -satellite_clock_bias_s);
+      sv_pos = geph2pos(sv_tx, glo_ephem, &satellite_clock_bias_s);
+      sv_vel = geph2vel(sv_tx, glo_ephem, &satellite_clock_drift_sps);
+    } else {
+      EphemPtr ephem = std::dynamic_pointer_cast<Ephem>(ephems[i]);
+      satellite_clock_bias_s = eph2svdt(sv_tx, ephem);
+      sv_tx = time_add(sv_tx, -satellite_clock_bias_s);
+      sv_pos = eph2pos(sv_tx, ephem, &satellite_clock_bias_s);
+      sv_vel = eph2vel(sv_tx, ephem, &satellite_clock_drift_sps);
+      sat_state->tgd = ephem->tgd[0];
+    }
+    sat_state->sat_id = sat;
+    sat_state->ttx = sv_tx;
+    sat_state->pos = sv_pos;
+    sat_state->vel = sv_vel;
+    sat_state->satellite_clock_bias_s = satellite_clock_bias_s;
+    sat_state->satellite_clock_drift_sps = satellite_clock_drift_sps;
+  }
+  return all_sv_states;
+}
+
+void SppSolverPipeline::psr_res(const Eigen::Matrix<double, 7, 1> &rcv_state,  //
+                                const std::vector<ObsPtr> &obs,                //
+                                const std::vector<SatStatePtr> &all_sv_states, //
+                                const std::vector<double> &iono_params,        //
+                                Eigen::VectorXd &res,                          //
+                                Eigen::MatrixXd &J,                            //
+                                std::vector<Eigen::Vector2d> &atmos_delay,     //
+                                std::vector<Eigen::Vector2d> &all_sv_azel) const {
+  const uint32_t num_sv = all_sv_states.size();
+  // clear output
+  res = Eigen::VectorXd::Zero(num_sv);
+  J = Eigen::MatrixXd::Zero(num_sv, 7);
+  atmos_delay.resize(num_sv);
+  all_sv_azel.resize(num_sv);
+
+  for (uint32_t i = 0; i < num_sv; ++i) {
+    int l1_idx = -1;
+    L1_freq(obs[i], &l1_idx);
+    if (l1_idx < 0)
+      continue;
+
+    const SatStatePtr &sat_state = all_sv_states[i];
+    uint32_t this_sys = satsys(sat_state->sat_id, NULL);
+    Eigen::Vector3d sv_pos = sat_state->pos;
+
+    double ion_delay = 0, tro_delay = 0;
+    double azel[2] = {0, M_PI / 2.0};
+    if (rcv_state.topLeftCorner<3, 1>().norm() > 0) {
+      sat_azel(rcv_state.topLeftCorner<3, 1>(), sv_pos, azel);
+      Eigen::Vector3d rcv_lla = ecef2geo(rcv_state.head<3>());
+      // use satellite signal transmit time instead
+      tro_delay = calculate_trop_delay(sat_state->ttx, rcv_lla, azel);
+      ion_delay = calculate_ion_delay(sat_state->ttx, iono_params, rcv_lla, azel);
+    }
+
+    Eigen::Vector3d rv2sv = sv_pos - rcv_state.topLeftCorner<3, 1>();
+    Eigen::Vector3d unit_rv2sv = rv2sv.normalized();
+    double sagnac_term = EARTH_OMG_GPS * (sv_pos(0) * rcv_state(1, 0) - sv_pos(1) * rcv_state(0, 0)) / LIGHT_SPEED;
+    const double receiver_clock_bias_m = rcv_state(3 + sys2idx.at(this_sys));
+    double psr_estimated = rv2sv.norm() + sagnac_term + receiver_clock_bias_m - sat_state->satellite_clock_bias_s * LIGHT_SPEED + tro_delay + ion_delay + sat_state->tgd * LIGHT_SPEED;
+
+    J.block(i, 0, 1, 3) = -unit_rv2sv.transpose();
+    J(i, 3 + sys2idx.at(this_sys)) = 1.0;
+    res(i) = psr_estimated - obs[i]->psr[l1_idx];
+
+    atmos_delay[i] = Eigen::Vector2d(ion_delay, tro_delay);
+    all_sv_azel[i] = Eigen::Vector2d(azel[0], azel[1]);
+  }
+}
+
+void SppSolverPipeline::dopp_res(const Eigen::Matrix<double, 4, 1> &rcv_state,  //
+                                 const Eigen::Vector3d &rcv_ecef,               //
+                                 const std::vector<ObsPtr> &obs,                //
+                                 const std::vector<SatStatePtr> &all_sv_states, //
+                                 Eigen::VectorXd &res,                          //
+                                 Eigen::MatrixXd &J) const {
+  const uint32_t num_sv = all_sv_states.size();
+  // clear output
+  res = Eigen::VectorXd::Zero(num_sv);
+  J = Eigen::MatrixXd::Zero(num_sv, 4);
+
+  for (uint32_t i = 0; i < num_sv; ++i) {
+    const SatStatePtr &sat_state = all_sv_states[i];
+    Eigen::Vector3d unit_rv2sv = (sat_state->pos - rcv_ecef).normalized();
+    double sagnac_term = EARTH_OMG_GPS / LIGHT_SPEED * (sat_state->vel(0) * rcv_ecef(1) + sat_state->pos(0) * rcv_state(1, 0) - sat_state->vel(1) * rcv_ecef(0) - sat_state->pos(1) * rcv_state(0, 0));
+    const double receiver_clock_drift_mps = rcv_state(3, 0);
+    double dopp_estimated = (sat_state->vel - rcv_state.topLeftCorner<3, 1>()).dot(unit_rv2sv) + receiver_clock_drift_mps + sagnac_term - sat_state->satellite_clock_drift_sps * LIGHT_SPEED;
+    int l1_idx = -1;
+    const double obs_freq = L1_freq(obs[i], &l1_idx);
+    if (obs_freq < 0)
+      continue;
+    const double wavelength = LIGHT_SPEED / obs_freq;
+    res(i) = dopp_estimated + obs[i]->dopp[l1_idx] * wavelength;
+    J.block(i, 0, 1, 3) = -1.0 * unit_rv2sv.transpose();
+    J(i, 3) = 1.0;
+  }
+}
+
 } // namespace gnss_comm

@@ -30,7 +30,6 @@ public:
   // 北斗沿用 B1I 选择；iono_params 为原模型所需的 8 项电离层参数。
   // 返回 [ECEF位置(m), receiver_clock_bias_m(GPS/GLO/GAL/BDS)]，QZSS 共用 GPS 钟差。
   // 沿用既有失败约定：观测不足或达到迭代上限时返回零向量。
-
   Eigen::Matrix<double, 7, 1> psr_pos(const std::vector<ObsPtr> &obs,          //
                                       const std::vector<EphemBasePtr> &ephems, //
                                       const std::vector<double> &iono_params) const;
@@ -43,16 +42,17 @@ public:
                                        Eigen::Vector3d &ref_ecef                // 参考的ECEF控制点
   ) const;
 
+  // 步骤二：利用伪距估计发送时刻，计算位置、速度、钟差(s)和钟漂(s/s)。
+  // 每颗卫星需有 L1 类伪距；RTK 复用它分别计算流动站与基站对应的卫星状态。
+  std::vector<SatStatePtr> sat_states(const std::vector<ObsPtr> &obs, //
+                                      const std::vector<EphemBasePtr> &ephems) const;
+
 private:
   // 步骤一：筛选支持的星座及 L1 类频率，同时保持观测与星历一一对应。
   void filter_L1(const std::vector<ObsPtr> &obs,          //
                  const std::vector<EphemBasePtr> &ephems, //
                  std::vector<ObsPtr> &L1_obs,             //
                  std::vector<EphemBasePtr> &L1_ephems) const;
-
-  // 步骤二：利用伪距估计发送时刻，计算位置、速度、钟差(s)和钟漂(s/s)。
-  std::vector<SatStatePtr> sat_states(const std::vector<ObsPtr> &obs, //
-                                      const std::vector<EphemBasePtr> &ephems) const;
 
   // 位置迭代步骤：构建“预测值−观测值”的伪距残差(m)和雅可比。
   // atmos_delay 输出电离层/对流层延迟(m)，all_sv_azel 输出方位角/高度角(rad)。
