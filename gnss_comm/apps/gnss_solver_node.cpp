@@ -39,6 +39,13 @@ static std::vector<std::string> expand_home(std::vector<std::string> paths) {
   return paths;
 }
 
+// 启动时检查输入文件，路径写错时直接报出参数名和路径，而不是在读取线程里崩溃。
+static void require_files(const std::string &param, const std::vector<std::string> &paths) {
+  for (const auto &path : paths)
+    if (!std::filesystem::is_regular_file(path))
+      throw std::invalid_argument(param + ": file not found: " + path);
+}
+
 // 观测时间是 GPST，ROS stamp 使用 UTC Unix 时间；显式转纳秒，避免秒/纳秒混用。
 static builtin_interfaces::msg::Time gpst2stamp(const gtime_t &time) {
   const auto utc = gpst2utc(time);
@@ -112,6 +119,8 @@ public:
       const double playback_rate = declare_parameter("offline.playback_rate", 0.0);
       if (obs_paths.empty() || nav_paths.empty() || playback_rate < 0)
         throw std::invalid_argument("offline mode needs offline.rover_obs_paths, offline.rover_nav_paths and playback_rate >= 0");
+      require_files("offline.rover_obs_paths", obs_paths);
+      require_files("offline.rover_nav_paths", nav_paths);
       raw = std::make_unique<RinexRawStream>(obs_paths, nav_paths, playback_rate);
     } else {
       RosRawTopics topics;
@@ -129,6 +138,9 @@ public:
       const auto paths = expand_home(declare_parameter<std::vector<std::string>>("correction.paths", std::vector<std::string>{}));
       if (paths.empty())
         throw std::invalid_argument("rtk.enable is true but correction.paths is empty");
+      require_files("correction.paths", paths);
+      if (!options.antex_path.empty())
+        require_files("correction.antex_path", {options.antex_path});
       correction = std::make_unique<CorrectionStream>(paths, declare_parameter<std::string>("correction.format", "auto"),
                                                       declare_parameter<std::vector<double>>("correction.base_ecef", std::vector<double>{}));
     }

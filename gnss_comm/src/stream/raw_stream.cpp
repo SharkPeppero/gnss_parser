@@ -59,6 +59,7 @@ void RinexRawStream::run(const RawStreamCallbacks &callbacks) {
       }
   }
   LOG(INFO) << "Offline rover: " << num_ephems << " ephemerides from " << nav_paths_.size() << " navigation files";
+  LOG_IF(ERROR, num_ephems == 0) << "No ephemeris loaded, all epochs will be skipped (navigation files must be RINEX 3.04)";
 
   // 电离层：取第一个含 GPSA/GPSB 的导航文件（读取失败时参数全为 0）
   for (const auto &path : nav_paths_) {

@@ -9,9 +9,9 @@ gnss_solver_node:
     # 注意：rinex2ephems / rinex2iono_params 目前只接受 RINEX 3.04 导航文件
     offline:
       rover_obs_paths:
-        - /path/to/rover.obs
+        - /home/yjh/happy_room/vins_ws/bags/rover_rinex/complex_environment_ros2.obs
       rover_nav_paths:
-        - /path/to/rover.nav
+        - /home/yjh/happy_room/vins_ws/bags/rover_rinex/complex_environment_ros2.nav
       playback_rate: 0.0            # 0 尽快处理；> 0 按观测时间间隔 / rate 节流，便于 RViz 观察
 
     # 离线差分数据（rtk.enable: true 时使用），RINEX 3.xx 观测文件或 RTCM 3.x 二进制文件（MSM4~7）
@@ -24,16 +24,18 @@ gnss_solver_node:
         - /home/yjh/happy_room/vins_ws/bags/base_station/HKWS00HKG_R_20210140000_01D_30S_MO.rnx
       # 基站标石（marker）ECEF [m]，覆盖文件中的坐标；再按 ANTENNA: DELTA H/E/N（RTCM 为 1006 天线高）换算到 ARP。
       # 当前为 RINEX 头 APPROX POSITION（米级），应替换为 IGS SINEX 精确坐标；删掉此行则用文件中的坐标
-      base_ecef: [-2430579.0108, 5374285.6738, 2418956.3331]
+      base_ecef: [ -2430579.0108, 5374285.6738, 2418956.3331 ]
       # IGS ANTEX 文件（2021 年数据用 igs14.atx），用于基站天线 PCO；置为 "" 则不改正
       antex_path: ""
 
+    # SPP定位算法参数
     spp:
       enable: true
       elevation_cutoff_degree: 15.0   # 截止高度角 [deg]，取值 [0, 90)
       max_iterations: 30              # 伪距最小二乘最大迭代次数，> 0
       convergence_threshold: 1.0e-4   # 状态增量范数收敛阈值，取值 (0, 1)
 
+    # RTK定位算法参数
     rtk:
       enable: true
       elevation_cutoff_degree: 15.0   # 截止高度角 [deg]，取值 [0, 90)
@@ -59,4 +61,4 @@ gnss_solver_node:
       hold_std_cycles: 1.0e-3         # fix-and-hold 伪观测标准差 [周]
 
     # SPP / RTK 结果 CSV 输出目录（spp_enu_*.csv、rtk_enu_*.csv），支持 ~/ 开头；置为 "" 关闭写出
-    output_path: ~/gnss_comm_output
+    output_path: /home/yjh/happy_room/vins_ws/gnss_comm_output

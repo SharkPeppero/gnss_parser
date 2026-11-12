@@ -178,6 +178,11 @@ namespace gnss_comm {
     {
         uint32_t gpst_leap_seconds = static_cast<uint32_t>(-1);
         std::ifstream ephem_file(rinex_filepath);
+        if (!ephem_file)
+        {
+            LOG(ERROR) << "Cannot open navigation file " << rinex_filepath;
+            return;
+        }
         std::string line;
         while(std::getline(ephem_file, line))
         {
@@ -191,10 +196,13 @@ namespace gnss_comm {
             else if (line.find("END OF HEADER") != std::string::npos)
                 break;
         }
-        LOG_IF(FATAL, gpst_leap_seconds == static_cast<uint32_t>(-1)) << "No leap second record found";
+        // LEAP SECONDS 在 RINEX 中是可选字段，只有 GLONASS（UTC 时间系）换算 GPST 需要；缺少时跳过 GLONASS 星历。
+        const bool has_leap_seconds = gpst_leap_seconds != static_cast<uint32_t>(-1);
+        LOG_IF(WARNING, !has_leap_seconds) << "No LEAP SECONDS record in " << rinex_filepath << ", GLONASS ephemerides are skipped";
 
         while(std::getline(ephem_file, line))
         {
+            if (line.empty())  continue;
             if (line.at(0) == 'G' || line.at(0) == 'C' || line.at(0) == 'E' || line.at(0) == 'J')
             {
                 std::vector<std::string> ephem_lines;
@@ -219,6 +227,7 @@ namespace gnss_comm {
                     std::getline(ephem_file, line);
                     ephem_lines.push_back(line);
                 }
+                if (!has_leap_seconds)  continue;
                 GloEphemPtr glo_ephem = rinex_line2glo_ephem(ephem_lines, gpst_leap_seconds);
                 if (sat2ephem.count(glo_ephem->sat) == 0)
                     sat2ephem.emplace(glo_ephem->sat, std::vector<EphemBasePtr>());
@@ -231,6 +240,11 @@ namespace gnss_comm {
     {
         iono_params.resize(8);
         std::ifstream file(rinex_filepath);
+        if (!file)
+        {
+            LOG(ERROR) << "Cannot open navigation file " << rinex_filepath;
+            return;
+        }
         std::string line;
 
         // check first line, mainly RINEX version
