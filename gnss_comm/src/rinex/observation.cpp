@@ -160,9 +160,11 @@ namespace gnss_comm {
             obs->dopp.push_back(dopp);
             obs->dopp_std.push_back(0);
             obs->cn0.push_back(cn0);
-            obs->lli.push_back(lli);
-            // bit0 伪距有效，bit1 载波有效；RINEX 载波已解决半周，同时置 bit2/bit3。
-            obs->status.push_back((psr != 0 ? 0x01 : 0x00) | (cp != 0 ? 0x0E : 0x00));
+            obs->lli.push_back(lli & 0x03); // RINEX bit2 为跟踪属性，不是统一 LLI。
+            // RINEX LLI bit1 表示半周模糊度，不能无条件认为半周已解决。
+            obs->status.push_back((psr != 0 ? PSEUDORANGE_VALID : 0) |
+                                  (cp != 0 ? CARRIER_PHASE_VALID | HALF_CYCLE_KNOWN |
+                                   ((lli & 0x02) ? 0 : HALF_CYCLE_RESOLVED) : 0));
         }
         return obs;
     }

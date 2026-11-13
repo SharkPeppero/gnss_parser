@@ -133,8 +133,10 @@ public:
         obs->dopp_std.push_back(0);
         obs->cn0.push_back(sig.cn0);
         obs->lli.push_back(sig.lli);
-        // 与 RINEX 读取一致：bit0 伪距有效，bit1 载波有效，半周已解决时再置 bit2/bit3。
-        obs->status.push_back((sig.psr != 0 ? 0x01 : 0x00) | (sig.cp != 0 ? (sig.half ? 0x02 : 0x0E) : 0x00));
+        // MSM 明确提供半周状态：bit4 已知，bit2 表示已解决；bit3 保留。
+        obs->status.push_back((sig.psr != 0 ? PSEUDORANGE_VALID : 0) |
+                              (sig.cp != 0 ? CARRIER_PHASE_VALID | HALF_CYCLE_KNOWN |
+                               (sig.half ? 0 : HALF_CYCLE_RESOLVED) : 0));
       }
       meas.push_back(obs);
     }

@@ -40,6 +40,7 @@ gnss_solver_node:
       enable: true
       elevation_cutoff_degree: 15.0   # 截止高度角 [deg]，取值 [0, 90)
       num_bands: 2                    # 双差频段数：1 只用 L1/E1/B1I，2 再加 L2/E5b/B2I
+      unknown_half_cycle_policy: float_only # 未提供半周状态：float_only 仅浮点估计；reject 排除载波
       use_glonass: false              # GLONASS FDMA 频间偏差未处理，暂不参与双差
       code_std_m: 1.0                 # 天顶方向非差伪距标准差 [m]；城市 u-blox 伪距多路径大，0.3 会把浮点模糊度拉偏
       phase_std_m: 0.003              # 天顶方向非差载波标准差 [m]

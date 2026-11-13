@@ -85,6 +85,9 @@ public:
     auto &rtk = options.rtk;
     rtk.elevation_cutoff_degree = declare_parameter("rtk.elevation_cutoff_degree", 15.0);
     rtk.num_bands = static_cast<uint32_t>(declare_parameter("rtk.num_bands", 2));
+    rtk.unknown_half_cycle_policy = declare_parameter<std::string>("rtk.unknown_half_cycle_policy", "float_only");
+    if (rtk.unknown_half_cycle_policy != "float_only" && rtk.unknown_half_cycle_policy != "reject")
+      throw std::invalid_argument("rtk.unknown_half_cycle_policy must be float_only or reject");
     rtk.use_glonass = declare_parameter("rtk.use_glonass", false);
     rtk.code_std_m = declare_parameter("rtk.code_std_m", 0.3);
     rtk.phase_std_m = declare_parameter("rtk.phase_std_m", 0.003);

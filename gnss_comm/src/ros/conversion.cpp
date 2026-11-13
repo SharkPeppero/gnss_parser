@@ -19,9 +19,16 @@
 */
 
 #include "gnss_comm/ros/conversion.hpp"
+#include <glog/logging.h>
 
 namespace gnss_comm
 {
+    static_assert(OBS_STATUS_VERSION == gnss_msg::msg::GnssObsMsg::STATUS_VERSION &&
+                  PSEUDORANGE_VALID == gnss_msg::msg::GnssObsMsg::PSEUDORANGE_VALID &&
+                  CARRIER_PHASE_VALID == gnss_msg::msg::GnssObsMsg::CARRIER_PHASE_VALID &&
+                  HALF_CYCLE_RESOLVED == gnss_msg::msg::GnssObsMsg::HALF_CYCLE_RESOLVED &&
+                  HALF_CYCLE_KNOWN == gnss_msg::msg::GnssObsMsg::HALF_CYCLE_KNOWN,
+                  "GNSS observation status constants must match gnss_msg");
     gnss_msg::msg::GnssEphemMsg ephem2msg(const EphemPtr &ephem_ptr)
     {
         gnss_msg::msg::GnssEphemMsg ephem_msg;
@@ -187,6 +194,7 @@ namespace gnss_comm
             obs_msg.cp_std  = obs->cp_std;
             obs_msg.dopp    = obs->dopp;
             obs_msg.dopp_std = obs->dopp_std;
+            obs_msg.status_version = obs->status_version;
             obs_msg.status  = obs->status;
 
             gnss_meas_msg.meas.push_back(obs_msg);
@@ -200,7 +208,12 @@ namespace gnss_comm
         for (size_t i = 0; i < gnss_meas_msg->meas.size(); ++i)
         {
             gnss_msg::msg::GnssObsMsg obs_msg = gnss_meas_msg->meas[i];
+            if (obs_msg.status_version != OBS_STATUS_VERSION) {
+                LOG_FIRST_N(ERROR, 1) << "Unsupported GNSS observation status_version; rebuild producers or convert legacy recordings.";
+                return {}; // 拒绝整历元，避免部分卫星被静默按不同版本解释。
+            }
             ObsPtr obs(new Obs());
+            obs->status_version = obs_msg.status_version;
             obs->time       = gpst2time(obs_msg.time.week, obs_msg.time.tow);
             obs->sat        = obs_msg.sat;
             obs->freqs      = obs_msg.freqs;

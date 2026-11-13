@@ -13,6 +13,7 @@
 #include <eigen3/Eigen/Dense>
 #include <map>
 #include <ostream>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -21,6 +22,7 @@ namespace gnss_comm {
 struct RtkSolverPipelineOptions {
   double elevation_cutoff_degree = 15.0; // 卫星高度角截止值，度
   uint32_t num_bands = 2;                // 参与双差的频段数：1 只用 L1/G1/E1/B1I；2 再加 L2/G2/E5b/B2I
+  std::string unknown_half_cycle_policy = "float_only"; // float_only / reject，均不允许未知状态整数固定
   bool use_glonass = false;              // GLONASS FDMA 双差需要处理频间偏差，当前默认不用
   double code_std_m = 0.3;               // 天顶方向非差伪距标准差，m
   double phase_std_m = 0.003;            // 天顶方向非差载波标准差，m
@@ -67,6 +69,7 @@ struct RtkSolverPipelineOptions {
     os << std::boolalpha                                                            //
        << "  elevation_cutoff_degree: " << o.elevation_cutoff_degree << "\n"       //
        << "  num_bands: " << o.num_bands << "\n"                                   //
+       << "  unknown_half_cycle_policy: " << o.unknown_half_cycle_policy << "\n"
        << "  use_glonass: " << o.use_glonass << "\n"                               //
        << "  code_std_m: " << o.code_std_m << "\n"                                 //
        << "  phase_std_m: " << o.phase_std_m << "\n"                               //
@@ -120,7 +123,9 @@ struct DdMeasurement {
   double base_sd_range_m{};                             // 基站几何距离单差 ρ_b^j − ρ_b^r（含 Sagnac），m
   double dd_psr_m{};
   double dd_cp_m{}; // 双差载波，m；含双差整周模糊度 × 波长
-  bool cp_valid{};  // 两站两星载波都有效（半周已解决），周跳由 *_slip 单独给出
+  bool cp_valid{};  // 两站两星载波可参与浮点估计
+  bool integer_fixable{}; // 两站两星半周均已知且已解决、信号兼容
+  uint32_t sat_phase_signature{}, ref_phase_signature{}; // 信号码型及半周状态，变化时重置模糊度
   double var_factor_sat{}, var_factor_ref{}; // 高度角定权系数 1/sin²(el)，乘以 σ² 得方差
   // 站间单差，用于初始化单差模糊度状态及相位-伪距一致性校正，m
   double sat_sd_psr_m{}, ref_sd_psr_m{};
@@ -170,6 +175,7 @@ public:
 private:
   using AmbKey = std::pair<uint32_t, int>; // (卫星编号, 频段)
   struct AmbState {
+    uint32_t phase_signature{};
     int idx{};          // 在 x_ 中的下标
     gtime_t last_seen{}; // 最近一次有有效载波的时刻
   };

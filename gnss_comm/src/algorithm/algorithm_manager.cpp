@@ -81,7 +81,7 @@ EpochResult AlgorithmManager::process(const std::vector<ObsPtr> &meas) {
     if (L1_freq(entry, &index) <= 0 || index < 0)
       continue;
     const auto i = static_cast<size_t>(index);
-    if (i >= entry->psr.size() || i >= entry->psr_std.size() || i >= entry->status.size() || !(entry->status[i] & 1) || !std::isfinite(entry->psr[i]) || entry->psr[i] <= 0 ||
+    if (entry->status_version != OBS_STATUS_VERSION || i >= entry->psr.size() || i >= entry->psr_std.size() || i >= entry->status.size() || !(entry->status[i] & PSEUDORANGE_VALID) || !std::isfinite(entry->psr[i]) || entry->psr[i] <= 0 ||
         !std::isfinite(entry->psr_std[i]) || entry->psr_std[i] < 0 || std::abs(time_diff(entry->time, meas.front()->time)) > 0.001)
       continue;
     const auto ephem = select_ephemeris(entry);

@@ -20,6 +20,26 @@ gnss_solver_node（apps/gnss_solver_node.cpp：参数、发布、CSV、天空图
 
 SPP 与 RTK 共用同一套筛选后的观测和星历，可以同时开启（`spp.enable`、`rtk.enable`）。
 
+## 统一观测状态（版本 1）
+
+UBlox、Unicore、RTCM 和 RINEX 均转换为 `GnssObsMsg` / `GNSSObservation` 的统一语义，解算器不判断接收机品牌。
+
+| status 位 | 含义 |
+| --- | --- |
+| bit0 | 伪距有效 |
+| bit1 | 载波有效 |
+| bit2 | 半周已解决，仅 bit4 为 1 时有意义 |
+| bit3 | 保留，不再复制 UBX subHalfCyc |
+| bit4 | 半周状态已知；0 表示未知，不等于已知未解决 |
+
+`lli` bit0 为周跳/相位不连续，bit1 为已知半周未解决。UBlox 将 RAWX 状态转换到以上定义；Unicore N4 OBSVM 仅提供伪距、载波有效性，因此不置 bit4。RTCM MSM 使用 half-cycle 标志，RINEX 使用载波字段 LLI bit1；两者均明确设置已知状态。
+
+`rtk.unknown_half_cycle_policy` 默认 `float_only`，允许未知半周载波进入浮点滤波，但不允许对应模糊度参与 LAMBDA 或 fix-and-hold；`reject` 则排除这类载波。已知半周未解决的载波两种策略均排除。整数固定还要求两站两星半周均已解决、信号码型已知且一致。相位符号/单位保持统一约定，未知状态并不保证没有未报告的半周跳变。
+
+GF 周跳检测使用同一载波策略。半周状态或所选码型变化会重置对应单差模糊度。只有真正尝试过整数搜索的历元才触发“长时间无法固定”的重置，避免正常的 Unicore 浮点解被反复清空。
+
+`GnssObsMsg.status_version` 必须为 1；0 或不支持的版本会拒绝整个观测历元并输出错误。消息结构已变化，需要一起重建 `gnss_msg`、`gnss_comm` 和两个驱动。旧 bag 必须使用旧消息定义读取，再按原生产者协议转换；旧 UBlox 原始状态不能直接视为新版统一状态，旧 Unicore 数据不得补造半周信息。此处不提供自动旧 bag 转换。
+
 ## 整体流程
 
 ![RTK 单历元处理流程](images/rtk_pipeline_flow.png)

@@ -153,14 +153,15 @@ std::vector<ObsPtr> UbloxMessageProcessor::parse_meas_msg(const uint8_t *msg_dat
     const bool has_prev_track = prev_lock_time_it != sat_lock_times.end() && prev_track_state_it != sat_track_states.end();
 
     const double lock_time_s = static_cast<double>(lock_time) * 1e-3;
-    const uint8_t curr_track_state = static_cast<uint8_t>(tck_sta & 0x0F);
+    const uint8_t curr_track_state = static_cast<uint8_t>((tck_sta & 0x0C) |
+                                                            (psr != 0 ? 0x01 : 0) | (cp != 0 ? 0x02 : 0));
     uint8_t slip = 0;
     if (has_prev_track) {
       const uint8_t prev_track_state = prev_track_state_it->second;
       const bool prev_phase_valid = (prev_track_state & 0x02U) != 0U;
       const bool curr_phase_valid = (curr_track_state & 0x02U) != 0U;
       const bool phase_validity_changed = prev_phase_valid != curr_phase_valid;
-      const bool half_cycle_state_changed = ((prev_track_state ^ curr_track_state) & 0x08U) != 0U;
+      const bool half_cycle_state_changed = ((prev_track_state ^ curr_track_state) & 0x0CU) != 0U;
 
       slip = (lock_time == 0U) ||                         //
              (lock_time_s < prev_lock_time_it->second) || //
@@ -197,7 +198,10 @@ std::vector<ObsPtr> UbloxMessageProcessor::parse_meas_msg(const uint8_t *msg_dat
     obs->cp_std.push_back(0.004 * cp_std);
     obs->dopp.push_back(dopp);
     obs->dopp_std.push_back(0.002 * (1 << dopp_std));
-    obs->status.push_back(tck_sta & 0x0F); // 保留低 4 位跟踪状态，便于后续调试观测质量。
+    // RAWX trkStat -> 接收机无关状态；过滤掉的观测也必须清除有效位。
+    obs->status.push_back((psr != 0 ? PSEUDORANGE_VALID : 0) |
+                          (cp != 0 ? CARRIER_PHASE_VALID : 0) |
+                          HALF_CYCLE_KNOWN | (halfv ? HALF_CYCLE_RESOLVED : 0));
   }
 
   if (!obs_meas.empty()) {

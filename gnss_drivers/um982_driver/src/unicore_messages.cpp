@@ -199,6 +199,7 @@ void UnicoreMessages::observations(const Fields& f, const gnss_msg::msg::GnssTim
         {
             satellites[sat] = epoch.meas.size();
             gnss_msg::msg::GnssObsMsg obs;
+            obs.status_version = gnss_msg::msg::GnssObsMsg::STATUS_VERSION;
             obs.sat = sat;
             obs.time = time;
             epoch.meas.push_back(obs);
@@ -226,7 +227,9 @@ void UnicoreMessages::observations(const Fields& f, const gnss_msg::msg::GnssTim
         obs.cp_std.push_back(number(f, i + 5) * 0.0001);
         obs.dopp.push_back(number(f, i + 6));
         obs.dopp_std.push_back(kUnknown); // OBSVM does not provide Doppler uncertainty.
-        obs.status.push_back((psr_valid ? 1 : 0) | (cp_valid ? 2 : 0));
+        // N4 表 7-143 只定义载波/伪距有效位，没有半周状态。
+        obs.status.push_back((psr_valid ? gnss_msg::msg::GnssObsMsg::PSEUDORANGE_VALID : 0) |
+                             (cp_valid ? gnss_msg::msg::GnssObsMsg::CARRIER_PHASE_VALID : 0));
     }
     if (!epoch.meas.empty()) obs_->publish(epoch);
 }

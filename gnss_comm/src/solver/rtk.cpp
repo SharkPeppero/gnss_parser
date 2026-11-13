@@ -29,10 +29,34 @@ int signal_index(const ObsPtr &obs, const uint32_t sys, const int band) {
   for (size_t i = 0; i < obs->freqs.size(); ++i) {
     if (band_index(sys, obs->freqs[i]) != band)
       continue;
-    if (i < obs->psr.size() && i < obs->cp.size() && i < obs->lli.size() && i < obs->status.size())
+    if (i < obs->psr.size() && i < obs->cp.size() && i < obs->lli.size() && i < obs->status.size() && i < obs->code.size())
       return static_cast<int>(i);
   }
   return -1;
+}
+
+// 载波有效性与整数资格分开：未知半周可选择仅参与浮点估计。
+bool phase_usable(const ObsPtr &obs, int i, const std::string &policy) {
+  if (obs->status_version != OBS_STATUS_VERSION || !(obs->status[i] & CARRIER_PHASE_VALID) ||
+      !std::isfinite(obs->cp[i]) || obs->cp[i] == 0)
+    return false;
+  if (obs->lli[i] & 0x02)
+    return false;
+  const uint8_t status = obs->status[i];
+  return (status & HALF_CYCLE_KNOWN) ? (status & HALF_CYCLE_RESOLVED) != 0 : policy == "float_only";
+}
+
+bool phase_fixable(const ObsPtr &obs, int i) {
+  return (obs->status[i] & (HALF_CYCLE_KNOWN | HALF_CYCLE_RESOLVED)) ==
+         (HALF_CYCLE_KNOWN | HALF_CYCLE_RESOLVED);
+}
+
+// 两站实际信号及半周状态组成单差模糊度的连续性标识。
+uint32_t phase_signature(const ObsPtr &rover, int ri, const ObsPtr &base, int bi) {
+  return (rover->status[ri] & (CARRIER_PHASE_VALID | HALF_CYCLE_KNOWN | HALF_CYCLE_RESOLVED)) |
+         ((base->status[bi] & (CARRIER_PHASE_VALID | HALF_CYCLE_KNOWN | HALF_CYCLE_RESOLVED)) << 5) |
+         (static_cast<uint32_t>(rover->code[ri]) << 10) |
+         (static_cast<uint32_t>(base->code[bi]) << 18);
 }
 
 // 几何距离加 Sagnac 改正，m。
@@ -51,12 +75,12 @@ std::pair<uint32_t, int> amb_group(const std::pair<uint32_t, int> &key) {
 namespace {
 
 // 无几何组合 GF = λ1·φ1 − λ2·φ2（m），两个频段载波都有效时返回 true。
-bool gf_combination(const ObsPtr &obs, double &gf_m) {
+bool gf_combination(const ObsPtr &obs, double &gf_m, const std::string &policy) {
   const uint32_t sys = satsys(obs->sat, NULL);
   const int i0 = signal_index(obs, sys, 0), i1 = signal_index(obs, sys, 1);
   if (i0 < 0 || i1 < 0 || obs->cp[i0] == 0 || obs->cp[i1] == 0)
     return false;
-  if ((obs->status[i0] & 0x06) != 0x06 || (obs->status[i1] & 0x06) != 0x06)
+  if (!phase_usable(obs, i0, policy) || !phase_usable(obs, i1, policy))
     return false;
   gf_m = LIGHT_SPEED / obs->freqs[i0] * obs->cp[i0] - LIGHT_SPEED / obs->freqs[i1] * obs->cp[i1];
   return true;
@@ -193,7 +217,7 @@ RtkSolution RtkSolverPipeline::solve(const std::vector<ObsPtr> &rover_obs,      
       clear_ambiguities();
       held_ = false;
       stalling_ = false;
-    } else if (sol.num_dd_cp >= options_.stall_min_phase_dd) {
+    } else if (searched && sol.num_dd_cp >= options_.stall_min_phase_dd) {
       // 浮点停滞：载波双差充足却长时间固定不上，多为模糊度带着伪距多路径偏差收敛、协方差过小，ratio 停在 1 附近。
       // 清空模糊度并放大位置协方差，保留位置/速度，让模糊度从浮点重新收敛。
       if (!stalling_) {
@@ -260,6 +284,8 @@ std::vector<DdMeasurement> RtkSolverPipeline::build_dd(const std::vector<ObsPtr>
     double sd_psr_m; // 站间单差伪距（已改正卫星钟差与对流层）
     double sd_cp_m;  // 站间单差载波（已改正卫星钟差与对流层）
     bool cp_valid;
+    bool integer_fixable;
+    uint32_t phase_signature;
     uint8_t slip;
     double wavelength_m;
   };
@@ -278,19 +304,39 @@ std::vector<DdMeasurement> RtkSolverPipeline::build_dd(const std::vector<ObsPtr>
     const double base_corr_m = base_states[k]->satellite_clock_bias_s * LIGHT_SPEED - calculate_trop_delay(base_states[k]->ttx, base_lla_, base_azel);
 
     for (int band = 0; band < static_cast<int>(options_.num_bands); ++band) {
-      const int ri = signal_index(rov, sys, band), bi = signal_index(base, sys, band);
+      const int ri = signal_index(rov, sys, band);
+      int bi = signal_index(base, sys, band);
+      // 优先使用两站相同码型，避免简单取同频段首个信号。
+      if (ri >= 0) {
+        for (size_t j = 0; j < base->freqs.size(); ++j) {
+          if (j < base->code.size() && j < base->psr.size() && j < base->cp.size() &&
+              j < base->lli.size() && j < base->status.size() && band_index(sys, base->freqs[j]) == band &&
+              base->code[j] == rov->code[ri] && (base->status[j] & PSEUDORANGE_VALID) &&
+              std::isfinite(base->psr[j]) && base->psr[j] > 0) {
+            bi = static_cast<int>(j);
+            break;
+          }
+        }
+      }
       if (ri < 0 || bi < 0)
         continue;
-      if (!(rov->status[ri] & 0x01) || !(base->status[bi] & 0x01) || rov->psr[ri] <= 0 || base->psr[bi] <= 0)
+      if (rov->status_version != OBS_STATUS_VERSION || base->status_version != OBS_STATUS_VERSION ||
+          !(rov->status[ri] & PSEUDORANGE_VALID) || !(base->status[bi] & PSEUDORANGE_VALID) ||
+          !std::isfinite(rov->psr[ri]) || !std::isfinite(base->psr[bi]) || rov->psr[ri] <= 0 || base->psr[bi] <= 0)
         continue;
       SdLeg leg;
       leg.k = k;
       leg.el = azel[1];
       leg.wavelength_m = LIGHT_SPEED / rov->freqs[ri];
       leg.sd_psr_m = (rov->psr[ri] + rov_corr_m) - (base->psr[bi] + base_corr_m);
-      // 载波需半周已解决（status bit1/bit2）；GLONASS 各星波长不同，暂不构建载波双差。
-      // TODO: 两站信号码不一致（如 L2C 与 L2W）时需改正 1/4 周相位偏差，可比对 code 字段。
-      leg.cp_valid = sys != SYS_GLO && (rov->status[ri] & 0x06) == 0x06 && (base->status[bi] & 0x06) == 0x06 && rov->cp[ri] != 0 && base->cp[bi] != 0;
+      // GLONASS 各星波长不同，暂不构建载波双差。
+      leg.cp_valid = sys != SYS_GLO && std::abs(rov->freqs[ri] - base->freqs[bi]) < 1.0 &&
+                     phase_usable(rov, ri, options_.unknown_half_cycle_policy) &&
+                     phase_usable(base, bi, options_.unknown_half_cycle_policy);
+      // 不同或未知码型可保留浮点偏差，但不能假定它具有整数性质。
+      leg.integer_fixable = leg.cp_valid && phase_fixable(rov, ri) && phase_fixable(base, bi) &&
+                            rov->code[ri] != CODE_NONE && rov->code[ri] == base->code[bi];
+      leg.phase_signature = phase_signature(rov, ri, base, bi);
       leg.slip = (rov->lli[ri] & 0x01 ? 0x01 : 0x00) | (base->lli[bi] & 0x01 ? 0x02 : 0x00);
       leg.sd_cp_m = leg.cp_valid ? (rov->cp[ri] * leg.wavelength_m + rov_corr_m) - (base->cp[bi] * leg.wavelength_m + base_corr_m) : 0;
       groups[{sys == SYS_QZS ? SYS_GPS : sys, band}].push_back(leg);
@@ -302,7 +348,12 @@ std::vector<DdMeasurement> RtkSolverPipeline::build_dd(const std::vector<ObsPtr>
     const std::vector<SdLeg> &legs = group.second;
     if (legs.size() < 2)
       continue;
-    const SdLeg &ref = *std::max_element(legs.begin(), legs.end(), [](const SdLeg &a, const SdLeg &b) { return a.el < b.el; });
+    // 优先选可固定载波作参考，其次可用载波，再按高度角，避免无效参考星排除整组载波。
+    const SdLeg &ref = *std::max_element(legs.begin(), legs.end(), [](const SdLeg &a, const SdLeg &b) {
+      if (a.integer_fixable != b.integer_fixable) return !a.integer_fixable;
+      if (a.cp_valid != b.cp_valid) return !a.cp_valid;
+      return a.el < b.el;
+    });
     // 基站几何距离取到该频段的相位中心（ARP + PCO）。
     const Eigen::Vector3d base_pc = base_phase_center(group.first.first, group.first.second);
     const double ref_base_range = geo_range(base_states[ref.k]->pos, base_pc);
@@ -320,6 +371,10 @@ std::vector<DdMeasurement> RtkSolverPipeline::build_dd(const std::vector<ObsPtr>
       dd.base_sd_range_m = geo_range(base_states[leg.k]->pos, base_pc) - ref_base_range;
       dd.dd_psr_m = leg.sd_psr_m - ref.sd_psr_m;
       dd.cp_valid = leg.cp_valid && ref.cp_valid;
+      dd.integer_fixable = dd.cp_valid && leg.integer_fixable && ref.integer_fixable &&
+                           leg.phase_signature == ref.phase_signature;
+      dd.sat_phase_signature = leg.phase_signature;
+      dd.ref_phase_signature = ref.phase_signature;
       dd.dd_cp_m = dd.cp_valid ? leg.sd_cp_m - ref.sd_cp_m : 0;
       dd.var_factor_sat = 1.0 / (std::sin(leg.el) * std::sin(leg.el));
       dd.var_factor_ref = 1.0 / (std::sin(ref.el) * std::sin(ref.el));
@@ -446,29 +501,41 @@ void RtkSolverPipeline::update_ambiguities(const std::vector<DdMeasurement> &dds
   struct SdInfo {
     double sd_cp_m, sd_psr_m, wavelength_m;
     uint8_t slip;
+    uint32_t phase_signature;
   };
   std::map<AmbKey, SdInfo> sds;
+  std::map<AmbKey, std::pair<uint32_t, uint8_t>> continuity;
   for (const auto &dd : dds) {
+    // 即使本历元相位被排除，也保留状态变化/周跳，避免之后复用已失效的模糊度。
+    continuity[{dd.sat, dd.band}] = {dd.sat_phase_signature, dd.sat_slip};
+    continuity[{dd.ref_sat, dd.band}] = {dd.ref_phase_signature, dd.ref_slip};
     if (!dd.cp_valid)
       continue;
-    sds[{dd.sat, dd.band}] = {dd.sat_sd_cp_m, dd.sat_sd_psr_m, dd.wavelength_m, dd.sat_slip};
-    sds[{dd.ref_sat, dd.band}] = {dd.ref_sd_cp_m, dd.ref_sd_psr_m, dd.wavelength_m, dd.ref_slip};
+    sds[{dd.sat, dd.band}] = {dd.sat_sd_cp_m, dd.sat_sd_psr_m, dd.wavelength_m, dd.sat_slip, dd.sat_phase_signature};
+    sds[{dd.ref_sat, dd.band}] = {dd.ref_sd_cp_m, dd.ref_sd_psr_m, dd.wavelength_m, dd.ref_slip, dd.ref_phase_signature};
   }
 
   // 1. 删除长时间未观测或发生周跳的模糊度。
   std::vector<AmbKey> to_remove;
   for (const auto &amb : ambs_) {
+    const auto track = continuity.find(amb.first);
+    if (track != continuity.end() &&
+        (track->second.first != amb.second.phase_signature || (track->second.second & 0x01) ||
+         (base_changed && (track->second.second & 0x02)))) {
+      to_remove.push_back(amb.first);
+      continue;
+    }
     const auto it = sds.find(amb.first);
     if (it == sds.end()) {
       if (time_diff(time, amb.second.last_seen) > options_.max_amb_outage_s)
         to_remove.push_back(amb.first);
       continue;
     }
-    if ((it->second.slip & 0x01) || (base_changed && (it->second.slip & 0x02)))
-      to_remove.push_back(amb.first);
   }
   for (const auto &key : to_remove)
     remove_ambiguity(key);
+  if (!to_remove.empty())
+    fix_count_ = 0;
 
   // 2. 相位-伪距一致性：接收机钟差变化会使所有单差模糊度整体漂移（双差中抵消），
   //    按组把已有状态平移到当前 (载波−伪距) 的水平，保证新旧模糊度的公共部分一致。
@@ -495,6 +562,7 @@ void RtkSolverPipeline::update_ambiguities(const std::vector<DdMeasurement> &dds
       add_ambiguity(sd.first, (sd.second.sd_cp_m - sd.second.sd_psr_m) / sd.second.wavelength_m, var, time);
     else
       it->second.last_seen = time;
+    ambs_.at(sd.first).phase_signature = sd.second.phase_signature;
   }
 }
 
@@ -601,7 +669,7 @@ bool RtkSolverPipeline::fix_ambiguity(const std::vector<DdMeasurement> &dds, con
   };
   std::vector<Candidate> cands;
   for (size_t i = 0; i < dds.size(); ++i) {
-    if (!phase_used[i])
+    if (!phase_used[i] || !dds[i].integer_fixable)
       continue;
     const auto sat_it = ambs_.find({dds[i].sat, dds[i].band}), ref_it = ambs_.find({dds[i].ref_sat, dds[i].band});
     if (sat_it != ambs_.end() && ref_it != ambs_.end())
@@ -696,7 +764,7 @@ std::map<uint32_t, uint8_t> RtkSolverPipeline::detect_slips_gf(const std::vector
   const auto check = [&](const std::vector<ObsPtr> &obs_list, std::map<uint32_t, GfRecord> &history, const uint8_t bit, const double max_dt) {
     for (const auto &obs : obs_list) {
       double gf_m = 0;
-      if (!gf_combination(obs, gf_m)) {
+      if (!gf_combination(obs, gf_m, options_.unknown_half_cycle_policy)) {
         history.erase(obs->sat);
         continue;
       }
@@ -721,7 +789,7 @@ void RtkSolverPipeline::add_ambiguity(const AmbKey &key, const double value_cycl
   P_.row(n).setZero();
   P_.col(n).setZero();
   P_(n, n) = var_cycles2;
-  ambs_[key] = {n, time};
+  ambs_[key] = {0, n, time};
 }
 
 void RtkSolverPipeline::clear_ambiguities() {
