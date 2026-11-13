@@ -1,0 +1,9 @@
+# CH340 USB Serial Converter
+# VID: 1a86
+# PID: 7523
+
+SUBSYSTEM=="tty", KERNEL=="ttyUSB*", \
+ATTRS{idVendor}=="1a86", \
+ATTRS{idProduct}=="7523", \
+SYMLINK+="um982", \
+MODE="0666"

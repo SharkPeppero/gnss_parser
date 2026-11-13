@@ -139,8 +139,9 @@ $$
 
 - **重置**：首历元、时间倒退、或历元间隔超过 `max_gap_s` 时触发。位置与协方差取伪距差分解；速度置零，方差为 (10 m/s)²；清空模糊度，连续固定计数和 hold 标志清零。没有伪距差分解时无法重置，只输出 SPP。
 - **发散保护**（量测更新之后检查，触发时同样重置，本历元输出伪距差分/单点解）：
-  - 浮点位置与本历元伪距差分解相差超过 `reset_pos_diff_m`（默认 30 m），且连续 `reset_diverge_epochs`（默认 5）个历元都超限（单历元的伪距差分解在城市多路径下可能偏几十米，不能据此立即重置）；伪距差分不可用时与 SPP 比较。此时按伪距差分解重置，没有伪距差分解时用 SPP 位置、(10 m)² 方差重置。
+  - 浮点位置与本历元伪距差分解相差超过 `reset_pos_diff_m`（默认 30 m），且连续 `reset_diverge_epochs`（默认 5）个历元都超限（单历元的伪距差分解在城市多路径下可能偏几十米，不能据此立即重置）；伪距差分不可用时与 SPP 比较，门限放宽为 `reset_spp_diff_m`（默认 300 m，SPP 在城市峡谷可偏上百米）。此时按伪距差分解重置，没有伪距差分解时用 SPP 位置、(10 m)² 方差重置。
   - 参与更新的载波双差少于 `reset_min_phase_dd`（默认 5），且持续超过 `reset_low_phase_s`（默认 10 s）。
+- 浮点停滞恢复：载波双差不少于 `stall_min_phase_dd`（默认 8），却连续 `stall_reset_s`（默认 30 s）固定不上时，只清空模糊度、保留位置和速度，并在位置协方差上加一份伪距差分协方差（不可用时加 1 m²）。这对应浮点模糊度带着伪距多路径偏差收敛、协方差过小、ratio 停在 1 附近的情况；此时位置偏差只有分米级，碰不到上面的重置条件。
 - **预测**：匀速模型 r ← r + v·Δt。过程噪声按白噪声加速度离散化，每个轴独立，q\_a = `accel_std_mps2`²；模糊度对角元加随机游走 `amb_process_std_cycles`²·Δt。
 
 $$
@@ -286,7 +287,7 @@ timestamp,x,y,z,lat,lon,alt,pos_type,num_dd_psr,num_dd_cp,base_age_s,ratio,num_f
 | `rtk.elevation_cutoff_degree` | 15.0 | deg | 截止高度角，RTK 内部的 SPP 初值共用 | 城市环境可提高到 20 |
 | `rtk.num_bands` | 2 | — | 双差频段数：1 只用 L1 类，2 再加 L2 类 | 双频接收机保持 2；GF 周跳探测需要 2 |
 | `rtk.use_glonass` | false | — | GLONASS 参与伪距双差（载波始终不用） | 频间偏差未处理，保持 false |
-| `rtk.code_std_m` | 0.3 | m | 天顶方向非差伪距标准差 | u-blox 可取 0.3–1.0 |
+| `rtk.code_std_m` | 0.3 | m | 天顶方向非差伪距标准差 | u-blox 可取 0.3–1.0；HKUST 城市数据 alg_cfg 用 1.0 |
 | `rtk.phase_std_m` | 0.003 | m | 天顶方向非差载波标准差 | 新息频繁超限时取 0.005 |
 | `rtk.max_base_age_s` | 30.0 | s | 最大差分龄期 | 实时 RTK 应 ≤ 5 |
 | `rtk.baseline_std_ppm` | 1.0 | ppm | 与基线长度成正比的非差误差 | 12.9 km 基线可取 2–3 |
@@ -307,9 +308,12 @@ timestamp,x,y,z,lat,lon,alt,pos_type,num_dd_psr,num_dd_cp,base_age_s,ratio,num_f
 | `rtk.fix_validate_sigma` | 4.0 | σ | 固定解载波残差检验门限 | 拒绝过多时调大到 5 |
 | `rtk.reset_pos_diff_m` | 30.0 | m | 浮点与伪距差分（或 SPP）相差超过的门限 | 城市峡谷 SPP 粗差大时调大 |
 | `rtk.reset_diverge_epochs` | 5 | 历元 | 连续超过 `reset_pos_diff_m` 达到该数才重置 | — |
+| `rtk.reset_spp_diff_m` | 300.0 | m | 伪距差分不可用、改与 SPP 比较时的门限 | — |
 | `rtk.psr_outlier_sigma` | 4.0 | σ | 双差伪距定位的粗差剔除门限（最多剔 1/3，至少留 5 个） | — |
 | `rtk.reset_min_phase_dd` | 5 | 个 | 载波双差不足的判定门限 | — |
 | `rtk.reset_low_phase_s` | 10.0 | s | 载波双差不足持续超过该时长时重置 | — |
+| `rtk.stall_min_phase_dd` | 8 | 个 | 浮点停滞判定所需的最少载波双差 | — |
+| `rtk.stall_reset_s` | 30.0 | s | 连续该时长未固定时清空模糊度 | 重初始化过于频繁时调大到 60 |
 | `correction.format` | auto | — | auto / rinex / rtcm3 | 文件名不规范时显式指定 |
 | `correction.paths` | HKWS 013/014 | 路径 | 基站 RINEX 或 RTCM 文件列表，支持 `~/`；第一个文件提供测站与天线信息 | 数据跨天时两天都要加 |
 | `correction.base_ecef` | HKWS APPROX XYZ | m | 基站标石 ECEF，覆盖文件中的坐标，再换算到 ARP；删掉此行则用文件中的坐标 | **需换成 IGS SINEX 精确坐标** |

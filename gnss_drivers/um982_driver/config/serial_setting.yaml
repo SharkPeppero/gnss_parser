@@ -1,0 +1,56 @@
+# Serial port settings
+serial_port: "/dev/um982" # rule文件绑定端口
+baud_rate: 115200 # 波特率
+
+# um982 config cmd
+
+## 
+# 以下命令省略 COM 口编号，默认在接收命令的当前串口输出。
+# 周期单位为秒：1 = 1 Hz，0.2 = 5 Hz，0.1 = 10 Hz。
+# A 后缀为 ASCII 格式；驱动校验 CRC 后发布 obs、ephem、glo_ephem 和分系统 iono 话题。
+# 多星多频 ASCII 数据可能超过 115200 波特率容量，先以 1 Hz 采集观测量。
+# 提高频率前需同步修改模块 COM 口波特率和上面的 baud_rate；仅改 YAML 不会改模块。
+um982_cfg_cmd:
+  - "UNLOG"                         # 停止当前串口日志输出，再配置所需消息
+
+  # 定位结果
+  - "GPRMC 1"                       # UTC、位置、地速及航迹角，1 Hz
+  - "GPGGA 1"                       # 定位质量、位置及高度，10 Hz
+
+  # 主天线原始观测量：所有实际跟踪到的卫星和频点，1 Hz
+  # 包括伪距(m)、载波相位(周)、多普勒(Hz)、标准差、载噪比、锁定时间和跟踪状态。
+  - "OBSVMA 1"
+  # 双天线场景需要从天线观测量时启用；会进一步增加串口数据量。
+  # - "OBSVHA 1"
+
+  # 广播星历：首次输出，随后内容发生变化时再次输出，不按观测频率重复发送。
+  - "GPSEPHA ONCHANGED"             # GPS
+  - "BDSEPHA ONCHANGED"             # 北斗
+  - "BD3EPHA ONCHANGED"             # 北斗三号
+  - "GLOEPHA ONCHANGED"             # GLONASS
+  - "GALEPHA ONCHANGED"             # Galileo
+  - "QZSSEPHA ONCHANGED"            # QZSS
+
+  # 广播电离层模型参数；需接收机成功接收到对应导航电文。
+  - "GPSIONA ONCHANGED"
+  - "BDSIONA ONCHANGED"
+  - "BD3IONA ONCHANGED"
+  - "GALIONA ONCHANGED"
+
+  # 驱动每次启动都会下发配置，无需每次写入模块闪存。
+  # 如需脱离驱动仍保留配置，确认配置正确后再启用保存命令。
+  - "SAVECONFIG"
+
+ntrip_module:
+  # 后台线程保存通过 CRC 校验的完整 RTCM3 帧；仅启用 NTRIP 时生效。
+  # 每次连接首次收到有效帧后新建 .rtcm3 和同名 .csv；正常退出时排空队列。
+  # CSV 的 received_unix_ns 为主机 UTC 接收时间，非卫星观测历元。
+  recording:
+    enabled: true
+    directory: "/home/yjh/happy_room/vins_ws/data/rtcm"
+  enabled: true
+  username: "ATRZ0016"
+  password: "z19qjqu3"
+  server_address: pnt.true-point.com
+  amount_point: RTCM33GRCEJ
+  port: 8002

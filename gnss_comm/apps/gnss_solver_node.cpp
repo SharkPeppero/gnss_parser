@@ -12,6 +12,7 @@
 #include <filesystem>
 #include <limits>
 #include <map>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 
@@ -107,20 +108,25 @@ public:
     rtk.reset_pos_diff_m = declare_parameter("rtk.reset_pos_diff_m", 30.0);
     const int reset_diverge_epochs = declare_parameter("rtk.reset_diverge_epochs", 5);
     rtk.psr_outlier_sigma = declare_parameter("rtk.psr_outlier_sigma", 4.0);
+    rtk.reset_spp_diff_m = declare_parameter("rtk.reset_spp_diff_m", 300.0);
     const int reset_min_phase_dd = declare_parameter("rtk.reset_min_phase_dd", 5);
     rtk.reset_low_phase_s = declare_parameter("rtk.reset_low_phase_s", 10.0);
+    const int stall_min_phase_dd = declare_parameter("rtk.stall_min_phase_dd", 8);
+    rtk.stall_reset_s = declare_parameter("rtk.stall_reset_s", 30.0);
     rtk.spp = options.spp;
     rtk.spp.elevation_cutoff_degree = rtk.elevation_cutoff_degree;
     if (rtk.elevation_cutoff_degree < 0 || rtk.elevation_cutoff_degree >= 90 || rtk.num_bands < 1 || rtk.num_bands > 2 || rtk.code_std_m <= 0 || rtk.phase_std_m <= 0 ||
         rtk.max_base_age_s <= 0 || rtk.baseline_std_ppm < 0 || rtk.accel_std_mps2 <= 0 || rtk.amb_init_std_cycles <= 0 || rtk.amb_process_std_cycles < 0 || rtk.innov_gate_sigma <= 0 ||
         rtk.max_gap_s <= 0 || rtk.max_amb_outage_s <= 0 || rtk.gf_slip_threshold_m <= 0 || rtk.min_ratio < 1.0 || min_fix_dd < 1 || rtk.hold_std_cycles <= 0 ||
         hold_min_fix_epochs < 1 || rtk.fix_validate_sigma <= 0 || rtk.reset_pos_diff_m <= 0 || reset_min_phase_dd < 0 || rtk.reset_low_phase_s <= 0 ||
-        rtk.par_min_fix_fraction < 0 || rtk.par_min_fix_fraction > 1 || reset_diverge_epochs < 1 || rtk.psr_outlier_sigma <= 0)
+        rtk.par_min_fix_fraction < 0 || rtk.par_min_fix_fraction > 1 || reset_diverge_epochs < 1 || rtk.psr_outlier_sigma <= 0 ||
+        rtk.reset_spp_diff_m <= 0 || stall_min_phase_dd < 0 || rtk.stall_reset_s <= 0)
       throw std::invalid_argument("Invalid RTK options");
     rtk.min_fix_dd = static_cast<uint32_t>(min_fix_dd);
     rtk.hold_min_fix_epochs = static_cast<uint32_t>(hold_min_fix_epochs);
     rtk.reset_min_phase_dd = static_cast<uint32_t>(reset_min_phase_dd);
     rtk.reset_diverge_epochs = static_cast<uint32_t>(reset_diverge_epochs);
+    rtk.stall_min_phase_dd = static_cast<uint32_t>(stall_min_phase_dd);
     options.antex_path = expand_home(declare_parameter<std::string>("correction.antex_path", ""));
     // 离线一次性载入整天星历，不能只保留最近 16 个版本
     options.max_ephem_history = offline_ ? 0 : 16;
@@ -160,6 +166,9 @@ public:
     }
     streams_ = std::make_unique<StreamWrapper>(std::move(raw), std::move(correction));
     manager_ = std::make_unique<AlgorithmManager>(options, streams_->correction());
+    std::ostringstream options_text;
+    options_text << options;
+    RCLCPP_INFO(get_logger(), "%s", options_text.str().c_str());
 
     reference_pub_ = create_publisher<sensor_msgs::msg::NavSatFix>(declare_parameter<std::string>("publish.reference_lla", "gnss/reference_lla"), rclcpp::QoS(1).transient_local());
     if (options.enable_spp) {

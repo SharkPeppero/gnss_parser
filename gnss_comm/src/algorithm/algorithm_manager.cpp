@@ -64,6 +64,8 @@ EphemBasePtr AlgorithmManager::select_ephemeris(const ObsPtr &obs) const {
 
 EpochResult AlgorithmManager::process(const std::vector<ObsPtr> &meas) {
   EpochResult result;
+
+  // 判断是否有电离层
   if (!has_iono_) {
     result.skip_reason = "waiting for ionosphere parameters";
     return result;

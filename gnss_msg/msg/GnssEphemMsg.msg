@@ -9,7 +9,7 @@ uint32 week         # toe 的周数（北斗已换算到 GPST）
 uint32 iode         # 星历数据龄期
 uint32 iodc         # 钟差数据龄期
 uint32 health       # 卫星健康状态（0=健康）
-uint32 code         # 数据来源标识
+uint32 code         # 数据来源标识；UM982 BD3 CNAV 为 0x100|FreqType (0=B1C,1=B2a,2=B2b)
 float64 ura         # 用户测距精度（SPP 中用于定权）
 float64 a           # 轨道长半轴 [m]（注意是 a 不是 sqrt(a)）
 float64 e           # 轨道偏心率
@@ -29,7 +29,7 @@ float64 cis         # 轨道倾角正弦调和改正振幅 [rad]
 float64 af0         # 卫星钟差 [s]
 float64 af1         # 卫星钟漂 [s/s]
 float64 af2         # 卫星钟漂变化率 [s/s^2]
-float64 tgd0        # 群延迟 [s]：GPS=TGD，北斗=TGD1(B1/B3)，Galileo=BGD E5a/E1
-float64 tgd1        # 群延迟 [s]：北斗=TGD2(B2/B3)，Galileo=BGD E5b/E1，GPS 未用
+float64 tgd0        # 群延迟 [s]：GPS=TGD，北斗=TGD1(B1/B3)，Galileo=BGD E5a/E1，UM982 BD3 CNAV=B1Cp TGD
+float64 tgd1        # 群延迟 [s]：北斗=TGD2(B2/B3)，Galileo=BGD E5b/E1，GPS 未用，UM982 BD3 CNAV=B2ap TGD
 float64 a_dot       # 长半轴变化率 [m/s]（仅 CNAV 电文）
 float64 n_dot       # 平均角速度变化率 [rad/s^2]（仅 CNAV 电文）

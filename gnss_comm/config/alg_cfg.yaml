@@ -41,7 +41,7 @@ gnss_solver_node:
       elevation_cutoff_degree: 15.0   # 截止高度角 [deg]，取值 [0, 90)
       num_bands: 2                    # 双差频段数：1 只用 L1/E1/B1I，2 再加 L2/E5b/B2I
       use_glonass: false              # GLONASS FDMA 频间偏差未处理，暂不参与双差
-      code_std_m: 0.3                 # 天顶方向非差伪距标准差 [m]
+      code_std_m: 1.0                 # 天顶方向非差伪距标准差 [m]；城市 u-blox 伪距多路径大，0.3 会把浮点模糊度拉偏
       phase_std_m: 0.003              # 天顶方向非差载波标准差 [m]
       max_base_age_s: 30.0            # 最大差分龄期 [s]；HKWS 为 30 s 采样，最近历元龄期 <= 15 s
       baseline_std_ppm: 1.0           # 与基线成正比的非差误差 [ppm]，近似未模型化的大气/轨道残差
@@ -65,9 +65,12 @@ gnss_solver_node:
       # 滤波器保护
       reset_pos_diff_m: 30.0          # 浮点位置与伪距差分解（不可用时为 SPP）相差超过该值…… [m]
       reset_diverge_epochs: 5         # ……且连续达到该历元数时重置滤波器；伪距差分解单历元可能被多路径拉偏
+      reset_spp_diff_m: 300.0         # 伪距差分不可用、改与 SPP 比较时的门限 [m]
       psr_outlier_sigma: 4.0          # 双差伪距定位迭代剔除标准化残差超过 k·σ 的观测（最多剔 1/3，至少留 5 个）
       reset_min_phase_dd: 5           # 参与更新的载波双差少于该值……
       reset_low_phase_s: 10.0         # ……且持续超过该时长时重置滤波器 [s]
+      stall_min_phase_dd: 8           # 载波双差不少于该值……
+      stall_reset_s: 30.0             # ……却连续该时长固定不上时，清空模糊度重新收敛（保留位置）[s]
 
     # SPP / RTK 结果 CSV 输出目录，支持 ~/ 开头；置为 "" 关闭写出
     # 每次启动写到 <output_path>/<本地时间 YYYY-MM-DD_HH_MM_SS>/spp_enu_*.csv、rtk_enu_*.csv

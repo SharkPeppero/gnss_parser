@@ -141,9 +141,11 @@ RtkSolution RtkSolverPipeline::solve(const std::vector<ObsPtr> &rover_obs,      
   sol.num_dd_cp = ekf_update(dds, phase_used);
 
   // 7. 滤波器保护：浮点位置连续多个历元偏离伪距差分解（不可用时为 SPP）过远，或载波双差长时间不足时重置，本历元输出伪距差分/单点解。
+  // SPP 在城市峡谷可能偏上百米，与之比较时用更宽的门限 reset_spp_diff_m。
   const Eigen::Vector3d check_pos = has_dgnss ? dgnss_pos : Eigen::Vector3d(spp_state.head<3>());
   const double pos_diff = (x_.head<3>() - check_pos).norm();
-  diverge_count_ = pos_diff > options_.reset_pos_diff_m ? diverge_count_ + 1 : 0;
+  const double diverge_threshold = has_dgnss ? options_.reset_pos_diff_m : options_.reset_spp_diff_m;
+  diverge_count_ = pos_diff > diverge_threshold ? diverge_count_ + 1 : 0;
   if (sol.num_dd_cp >= options_.reset_min_phase_dd) {
     low_phase_ = false;
   } else if (!low_phase_) {
@@ -178,6 +180,7 @@ RtkSolution RtkSolverPipeline::solve(const std::vector<ObsPtr> &rover_obs,      
     sol.pos_type = PV_NARROW_INT;
     sol.num_fix_dd = fixed_pairs.size();
     ++fix_count_;
+    stalling_ = false;
     if (options_.fix_and_hold && fix_count_ >= options_.hold_min_fix_epochs) {
       hold_ambiguity(fixed_pairs, fixed_amb);
       held_ = true;
@@ -189,6 +192,23 @@ RtkSolution RtkSolverPipeline::solve(const std::vector<ObsPtr> &rover_obs,      
       LOG(WARNING) << "[gnss_comm::RtkSolverPipeline::solve] held ambiguities failed validation, re-initializing ambiguities";
       clear_ambiguities();
       held_ = false;
+      stalling_ = false;
+    } else if (sol.num_dd_cp >= options_.stall_min_phase_dd) {
+      // 浮点停滞：载波双差充足却长时间固定不上，多为模糊度带着伪距多路径偏差收敛、协方差过小，ratio 停在 1 附近。
+      // 清空模糊度并放大位置协方差，保留位置/速度，让模糊度从浮点重新收敛。
+      if (!stalling_) {
+        stalling_ = true;
+        stall_since_ = sol.time;
+      } else if (time_diff(sol.time, stall_since_) > options_.stall_reset_s) {
+        LOG(WARNING) << "[gnss_comm::RtkSolverPipeline::solve] float stalled for " << time_diff(sol.time, stall_since_) << " s (ratio " << sol.ratio
+                     << ", phase DD = " << sol.num_dd_cp << "), re-initializing ambiguities";
+        clear_ambiguities();
+        P_.topLeftCorner<3, 3>() += has_dgnss ? dgnss_cov : Eigen::Matrix3d(Eigen::Matrix3d::Identity());
+        held_ = false;
+        stalling_ = false;
+      }
+    } else {
+      stalling_ = false;
     }
   }
   return sol;
@@ -399,6 +419,7 @@ void RtkSolverPipeline::reset_filter(const Eigen::Vector3d &pos, const Eigen::Ma
   held_ = false;
   diverge_count_ = 0;
   low_phase_ = false;
+  stalling_ = false;
 }
 
 void RtkSolverPipeline::predict(const double dt) {

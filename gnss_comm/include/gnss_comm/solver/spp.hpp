@@ -7,6 +7,7 @@
 #include "gnss_comm/types/satellite.hpp"
 #include <cstdint>
 #include <eigen3/Eigen/Dense>
+#include <ostream>
 #include <vector>
 
 namespace gnss_comm {
@@ -15,6 +16,13 @@ struct SppSolverPipelineOptions {
   double elevation_cutoff_degree = 15.0; // 卫星高度角截止值，度
   uint32_t max_iterations = MAX_ITER_PVT;
   double convergence_threshold = EPSILON_PVT; // 状态增量范数阈值，单位随位置/速度求解状态而定
+
+  // 参数加载后打印，每行一个字段
+  friend std::ostream &operator<<(std::ostream &os, const SppSolverPipelineOptions &o) {
+    return os << "  elevation_cutoff_degree: " << o.elevation_cutoff_degree << "\n"
+              << "  max_iterations: " << o.max_iterations << "\n"
+              << "  convergence_threshold: " << o.convergence_threshold << "\n";
+  }
 };
 
 // 单历元 SPP 计算流程，不负责文件读取、星历检索或跨历元滤波。

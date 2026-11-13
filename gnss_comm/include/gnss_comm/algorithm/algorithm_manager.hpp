@@ -11,6 +11,7 @@
 #include <deque>
 #include <map>
 #include <memory>
+#include <ostream>
 #include <string>
 #include <vector>
 
@@ -21,8 +22,24 @@ struct AlgorithmManagerOptions {
   bool enable_rtk = false;
   SppSolverPipelineOptions spp;
   RtkSolverPipelineOptions rtk;
-  std::string antex_path;         // 基站天线 PCO，为空不改正
-  size_t max_ephem_history = 16;  // 每颗卫星保留的星历版本数；0 不限（离线一次性载入整天星历时使用）
+  std::string antex_path;        // 基站天线 PCO，为空不改正
+  size_t max_ephem_history = 16; // 每颗卫星保留的星历版本数；0 不限（离线一次性载入整天星历时使用）
+
+  // 参数加载后打印；未启用的算法不打印其参数
+  friend std::ostream &operator<<(std::ostream &os, const AlgorithmManagerOptions &o) {
+    const std::ios_base::fmtflags flags = os.flags();
+    os << std::boolalpha << "AlgorithmManagerOptions:\n"
+       << " enable_spp: " << o.enable_spp << "\n"
+       << " enable_rtk: " << o.enable_rtk << "\n"
+       << " antex_path: \"" << o.antex_path << "\"\n"
+       << " max_ephem_history: " << o.max_ephem_history << "\n";
+    if (o.enable_spp)
+      os << " spp:\n" << o.spp;
+    if (o.enable_rtk)
+      os << " rtk:\n" << o.rtk;
+    os.flags(flags);
+    return os;
+  }
 };
 
 struct EpochResult {
@@ -42,11 +59,13 @@ public:
   AlgorithmManager(const AlgorithmManagerOptions &options, CorrectionStream *correction);
 
   void add_ephemeris(const EphemBasePtr &ephem);
+
   void set_iono(const std::vector<double> &iono_params);
 
   EpochResult process(const std::vector<ObsPtr> &meas);
 
 private:
+  /// 寻找当前观测是有最佳星历
   EphemBasePtr select_ephemeris(const ObsPtr &obs) const;
 
   AlgorithmManagerOptions options_;

@@ -16,14 +16,18 @@ namespace gnss_comm {
 // 基站信息要等差分数据加载后才有，因此解算器在 initialize 中创建。
 class RTKAlgorithmCore {
 public:
-  RTKAlgorithmCore(const RtkSolverPipelineOptions &options, const std::string &antex_path) : options_(options), antex_path_(antex_path) {}
+  RTKAlgorithmCore(const RtkSolverPipelineOptions &options, //
+                   const std::string &antex_path)
+      : options_(options), antex_path_(antex_path) {}
 
   bool initialized() const { return solver_ != nullptr; }
 
   // 标石 + ANTENNA: DELTA H/E/N → ARP；antex_path 非空时读取基站天线各频段 PCO。
   void initialize(const BaseStationInfo &station);
 
-  RtkSolution solve(const std::vector<ObsPtr> &rover_obs, const std::vector<EphemBasePtr> &rover_ephems, const std::vector<ObsPtr> &base_obs,
+  RtkSolution solve(const std::vector<ObsPtr> &rover_obs,          //
+                    const std::vector<EphemBasePtr> &rover_ephems, //
+                    const std::vector<ObsPtr> &base_obs,           //
                     const std::vector<double> &iono_params) {
     return solver_->solve(rover_obs, rover_ephems, base_obs, iono_params);
   }

@@ -12,6 +12,7 @@
 #include <cstdint>
 #include <eigen3/Eigen/Dense>
 #include <map>
+#include <ostream>
 #include <utility>
 #include <vector>
 
@@ -53,9 +54,55 @@ struct RtkSolverPipelineOptions {
   // 滤波器保护
   double reset_pos_diff_m = 30.0;  // 浮点位置与伪距差分解（不可用时为 SPP）相差超过该值……
   uint32_t reset_diverge_epochs = 5; // ……且连续达到该历元数时重置滤波器；伪距差分解单历元可能被多路径拉偏
+  double reset_spp_diff_m = 300.0;   // 伪距差分不可用、改与 SPP 比较时的门限，m；SPP 在城市峡谷误差可达上百米
   double psr_outlier_sigma = 4.0;  // 双差伪距定位迭代剔除标准化残差超过 k·σ 的观测
   uint32_t reset_min_phase_dd = 5; // 参与更新的载波双差少于该值……
   double reset_low_phase_s = 10.0; // ……且持续超过该时长时重置滤波器，s
+  uint32_t stall_min_phase_dd = 8; // 参与更新的载波双差不少于该值……
+  double stall_reset_s = 30.0;     // ……却连续该时长固定不上时，清空模糊度重新收敛（保留位置），s
+
+  // 参数加载后打印，每行一个字段；内部 SPP 初值参数以 spp. 前缀列出
+  friend std::ostream &operator<<(std::ostream &os, const RtkSolverPipelineOptions &o) {
+    const std::ios_base::fmtflags flags = os.flags();
+    os << std::boolalpha                                                            //
+       << "  elevation_cutoff_degree: " << o.elevation_cutoff_degree << "\n"       //
+       << "  num_bands: " << o.num_bands << "\n"                                   //
+       << "  use_glonass: " << o.use_glonass << "\n"                               //
+       << "  code_std_m: " << o.code_std_m << "\n"                                 //
+       << "  phase_std_m: " << o.phase_std_m << "\n"                               //
+       << "  max_base_age_s: " << o.max_base_age_s << "\n"                         //
+       << "  max_iterations: " << o.max_iterations << "\n"                         //
+       << "  convergence_threshold: " << o.convergence_threshold << "\n"           //
+       << "  spp.elevation_cutoff_degree: " << o.spp.elevation_cutoff_degree << "\n" //
+       << "  spp.max_iterations: " << o.spp.max_iterations << "\n"                 //
+       << "  spp.convergence_threshold: " << o.spp.convergence_threshold << "\n"   //
+       << "  baseline_std_ppm: " << o.baseline_std_ppm << "\n"                     //
+       << "  accel_std_mps2: " << o.accel_std_mps2 << "\n"                         //
+       << "  amb_init_std_cycles: " << o.amb_init_std_cycles << "\n"               //
+       << "  amb_process_std_cycles: " << o.amb_process_std_cycles << "\n"         //
+       << "  innov_gate_sigma: " << o.innov_gate_sigma << "\n"                     //
+       << "  max_gap_s: " << o.max_gap_s << "\n"                                   //
+       << "  max_amb_outage_s: " << o.max_amb_outage_s << "\n"                     //
+       << "  gf_slip_threshold_m: " << o.gf_slip_threshold_m << "\n"               //
+       << "  min_ratio: " << o.min_ratio << "\n"                                   //
+       << "  min_fix_dd: " << o.min_fix_dd << "\n"                                 //
+       << "  par_enabled: " << o.par_enabled << "\n"                               //
+       << "  par_min_fix_fraction: " << o.par_min_fix_fraction << "\n"             //
+       << "  fix_and_hold: " << o.fix_and_hold << "\n"                             //
+       << "  hold_std_cycles: " << o.hold_std_cycles << "\n"                       //
+       << "  hold_min_fix_epochs: " << o.hold_min_fix_epochs << "\n"               //
+       << "  fix_validate_sigma: " << o.fix_validate_sigma << "\n"                 //
+       << "  reset_pos_diff_m: " << o.reset_pos_diff_m << "\n"                     //
+       << "  reset_diverge_epochs: " << o.reset_diverge_epochs << "\n"             //
+       << "  reset_spp_diff_m: " << o.reset_spp_diff_m << "\n"                     //
+       << "  psr_outlier_sigma: " << o.psr_outlier_sigma << "\n"                   //
+       << "  reset_min_phase_dd: " << o.reset_min_phase_dd << "\n"                 //
+       << "  reset_low_phase_s: " << o.reset_low_phase_s << "\n"                   //
+       << "  stall_min_phase_dd: " << o.stall_min_phase_dd << "\n"                 //
+       << "  stall_reset_s: " << o.stall_reset_s << "\n";
+    os.flags(flags);
+    return os;
+  }
 };
 
 // 基站各（星座, 频段）的天线相位中心偏移，ECEF m，相对天线参考点；QZSS 按 GPS 查。
@@ -197,6 +244,8 @@ private:
   uint32_t diverge_count_ = 0;  // 浮点位置连续超出 reset_pos_diff_m 的历元数
   bool low_phase_ = false;      // 载波双差不足计时中
   gtime_t low_phase_since_{};   // 载波双差开始不足的时刻
+  bool stalling_ = false;       // 载波双差充足但未固定，计时中
+  gtime_t stall_since_{};       // 开始未固定的时刻
 };
 
 } // namespace gnss_comm
